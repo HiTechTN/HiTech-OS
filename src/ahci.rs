@@ -60,6 +60,74 @@ pub const FIS_TYPE_SET: u8 = 0x39;
 pub const FIS_TYPE_PIO: u8 = 0x5f;
 pub const FIS_TYPE_DEV: u8 = 0xa1;
 
+pub const ATA_CMD_READ_DMA_EXT: u8 = 0x25;
+pub const ATA_CMD_WRITE_DMA_EXT: u8 = 0x35;
+pub const ATA_CMD_IDENTIFY: u8 = 0xec;
+
+#[repr(C, packed)]
+pub struct FisRegH2D {
+    pub fis_type: u8,
+    pub pm_port: u8,
+    pub command: u8,
+    pub features_low: u8,
+    pub lba0: u8,
+    pub lba1: u8,
+    pub lba2: u8,
+    pub device: u8,
+    pub lba3: u8,
+    pub lba4: u8,
+    pub lba5: u8,
+    pub features_high: u8,
+    pub count_low: u8,
+    pub count_high: u8,
+    pub icc: u8,
+    pub control: u8,
+    pub rsvd: [u8; 4],
+}
+
+#[repr(C, align(128))]
+pub struct AhciCmdTable {
+    pub fis: [u8; 64],
+    pub acmd: [u8; 16],
+    pub rsvd: [u8; 48],
+    pub prdt: [AhciPrdtEntry; 8],
+}
+
+#[derive(Copy, Clone)]
+#[repr(C, packed)]
+pub struct AhciPrdtEntry {
+    pub dba: u32,
+    pub dbau: u32,
+    pub rsvd: u32,
+    pub dbc: u32,
+}
+
+#[repr(C, align(1024))]
+pub struct AhciCmdHeader {
+    pub resv: [u8; 8],
+    pub prdtl: u16,
+    pub prdbc: u32,
+    pub ctbau: u32,
+    pub ctba: u32,
+    pub rsvd2: [u32; 4],
+}
+
+pub static mut AHCI_CMD_SLOT: AhciCmdTable = AhciCmdTable {
+    fis: [0; 64],
+    acmd: [0; 16],
+    rsvd: [0; 48],
+    prdt: [AhciPrdtEntry { dba: 0, dbau: 0, rsvd: 0, dbc: 0 }; 8],
+};
+
+pub static mut AHCI_CMD_LIST: AhciCmdHeader = AhciCmdHeader {
+    resv: [0; 8],
+    prdtl: 0,
+    prdbc: 0,
+    ctbau: 0,
+    ctba: 0,
+    rsvd2: [0; 4],
+};
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum AhciError {
     NotFound,
@@ -136,24 +204,149 @@ impl HbaPort {
         (self.ssts & 0xf) == 0x03
     }
 
-    pub fn read(&mut self, _sector: u64, count: u32, buffer: &mut [u8]) -> Result<(), AhciError> {
+    pub fn read(&mut self, sector: u64, count: u32, buffer: &mut [u8]) -> Result<(), AhciError> {
         if buffer.len() < (count as usize * 512) {
             return Err(AhciError::IoError);
         }
 
-        if (self.tfd & PORT_TFD_BSY) != 0 {
+        if (self.tfd & (PORT_TFD_BSY | PORT_TFD_DRQ)) != 0 {
             return Err(AhciError::PortBusy);
         }
 
-        Ok(())
+        let fis = FisRegH2D {
+            fis_type: FIS_TYPE_H2D,
+            pm_port: 0x80,
+            command: ATA_CMD_READ_DMA_EXT,
+            features_low: 0,
+            lba0: (sector >> 0) as u8,
+            lba1: (sector >> 8) as u8,
+            lba2: (sector >> 16) as u8,
+            device: 0x40,
+            lba3: (sector >> 24) as u8,
+            lba4: (sector >> 32) as u8,
+            lba5: (sector >> 40) as u8,
+            features_high: 0,
+            count_low: count as u8,
+            count_high: (count >> 8) as u8,
+            icc: 0,
+            control: 0,
+            rsvd: [0; 4],
+        };
+
+        let cmd_table_addr: u32;
+        let cmd_addr: u32;
+        unsafe {
+            cmd_table_addr = &raw mut AHCI_CMD_SLOT as u32;
+            AHCI_CMD_SLOT.fis = [0u8; 64];
+            core::ptr::copy_nonoverlapping(
+                &fis as *const FisRegH2D as *const u8,
+                AHCI_CMD_SLOT.fis.as_mut_ptr(),
+                core::mem::size_of::<FisRegH2D>(),
+            );
+            AHCI_CMD_SLOT.prdt[0] = AhciPrdtEntry {
+                dba: buffer.as_ptr() as u32,
+                dbau: 0,
+                rsvd: 0,
+                dbc: ((count * 512 - 1) | 0x8000_0000),
+            };
+            AHCI_CMD_SLOT.acmd = [0u8; 16];
+
+            cmd_addr = &raw mut AHCI_CMD_LIST as u32;
+            AHCI_CMD_LIST.prdtl = 1;
+            AHCI_CMD_LIST.prdbc = 0;
+            AHCI_CMD_LIST.ctba = cmd_table_addr;
+            AHCI_CMD_LIST.ctbau = 0;
+        }
+
+        writel(self.port_addr + HBA_P_CLB, cmd_addr);
+        writel(self.port_addr + HBA_P_CLBU, 0);
+        writel(self.port_addr + HBA_P_FB, cmd_addr + 0x100);
+        writel(self.port_addr + HBA_P_FBU, 0);
+
+        writel(self.port_addr + HBA_P_CMD, self.cmd | PORT_CMD_START | PORT_CMD_FIS_RX);
+
+        writel(self.port_addr + HBA_P_CI, 1);
+
+        for _ in 0..100_000 {
+            if readl(self.port_addr + HBA_P_CI) & 1 == 0 {
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+
+        Err(AhciError::Timeout)
     }
 
-    pub fn write(&mut self, _sector: u64, _count: u32, _buffer: &[u8]) -> Result<(), AhciError> {
-        if (self.tfd & PORT_TFD_BSY) != 0 {
+    pub fn write(&mut self, sector: u64, count: u32, buffer: &[u8]) -> Result<(), AhciError> {
+        if buffer.len() < (count as usize * 512) {
+            return Err(AhciError::IoError);
+        }
+
+        if (self.tfd & (PORT_TFD_BSY | PORT_TFD_DRQ)) != 0 {
             return Err(AhciError::PortBusy);
         }
 
-        Ok(())
+        let fis = FisRegH2D {
+            fis_type: FIS_TYPE_H2D,
+            pm_port: 0x80,
+            command: ATA_CMD_WRITE_DMA_EXT,
+            features_low: 0,
+            lba0: (sector >> 0) as u8,
+            lba1: (sector >> 8) as u8,
+            lba2: (sector >> 16) as u8,
+            device: 0x40,
+            lba3: (sector >> 24) as u8,
+            lba4: (sector >> 32) as u8,
+            lba5: (sector >> 40) as u8,
+            features_high: 0,
+            count_low: count as u8,
+            count_high: (count >> 8) as u8,
+            icc: 0,
+            control: 0,
+            rsvd: [0; 4],
+        };
+
+        let cmd_table_addr: u32;
+        let cmd_addr: u32;
+        unsafe {
+            cmd_table_addr = &raw mut AHCI_CMD_SLOT as u32;
+            AHCI_CMD_SLOT.fis = [0u8; 64];
+            core::ptr::copy_nonoverlapping(
+                &fis as *const FisRegH2D as *const u8,
+                AHCI_CMD_SLOT.fis.as_mut_ptr(),
+                core::mem::size_of::<FisRegH2D>(),
+            );
+            AHCI_CMD_SLOT.prdt[0] = AhciPrdtEntry {
+                dba: buffer.as_ptr() as u32,
+                dbau: 0,
+                rsvd: 0,
+                dbc: ((count * 512 - 1) | 0x8000_0000),
+            };
+            AHCI_CMD_SLOT.acmd = [0u8; 16];
+            cmd_addr = &raw mut AHCI_CMD_LIST as u32;
+            AHCI_CMD_LIST.prdtl = 1;
+            AHCI_CMD_LIST.prdbc = 0;
+            AHCI_CMD_LIST.ctba = cmd_table_addr;
+            AHCI_CMD_LIST.ctbau = 0;
+        }
+
+        writel(self.port_addr + HBA_P_CLB, cmd_addr);
+        writel(self.port_addr + HBA_P_CLBU, 0);
+        writel(self.port_addr + HBA_P_FB, cmd_addr + 0x100);
+        writel(self.port_addr + HBA_P_FBU, 0);
+
+        writel(self.port_addr + HBA_P_CMD, self.cmd | PORT_CMD_START | PORT_CMD_FIS_RX);
+
+        writel(self.port_addr + HBA_P_CI, 1);
+
+        for _ in 0..100_000 {
+            if readl(self.port_addr + HBA_P_CI) & 1 == 0 {
+                return Ok(());
+            }
+            core::hint::spin_loop();
+        }
+
+        Err(AhciError::Timeout)
     }
 }
 

@@ -4,6 +4,7 @@ pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_INODES: usize = 64;
 pub const MAX_OPEN_FILES: usize = 16;
 pub const BLOCK_SIZE: usize = 512;
+pub const MAX_MOUNTS: usize = 8;
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum FileType {
@@ -14,6 +15,23 @@ pub enum FileType {
     Pipe,
     Symlink,
 }
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum FsType {
+    Tmpfs,
+    Ext2,
+    Devfs,
+}
+
+#[derive(Copy, Clone)]
+pub struct MountEntry {
+    pub path: [u8; MAX_NAME_LEN],
+    pub path_len: usize,
+    pub fs_type: FsType,
+    pub mounted: bool,
+    pub root_inode: u32,
+}
+
 
 #[derive(Copy, Clone)]
 pub struct DirEntry {
@@ -103,6 +121,7 @@ pub struct VirtualFileSystem {
     pub root_inode: u32,
     pub fd_table: [Option<FileDescriptor>; MAX_OPEN_FILES],
     pub next_fd: u32,
+    pub mounts: [Option<MountEntry>; MAX_MOUNTS],
 }
 
 impl VirtualFileSystem {
@@ -113,12 +132,20 @@ impl VirtualFileSystem {
             root_inode: 1,
             fd_table: [None; MAX_OPEN_FILES],
             next_fd: 0,
+            mounts: [None; MAX_MOUNTS],
         }
     }
 
     pub fn init(&mut self) {
         self.inodes[1] = Some(Inode::new(1, FileType::Directory));
         self.root_inode = 1;
+        self.mounts[0] = Some(MountEntry {
+            path: [0; MAX_NAME_LEN],
+            path_len: 1,
+            fs_type: FsType::Tmpfs,
+            mounted: true,
+            root_inode: 1,
+        });
     }
 
     pub fn create(&mut self, _name: &str, file_type: FileType) -> Option<u32> {
@@ -160,6 +187,59 @@ impl VirtualFileSystem {
 
     pub fn get_inode(&self, inode: u32) -> Option<&Inode> {
         self.inodes.get(inode as usize).and_then(|i| i.as_ref())
+    }
+
+    pub fn mount(&mut self, path: &str, fs_type: FsType) -> bool {
+        for slot in self.mounts.iter_mut() {
+            if slot.is_none() {
+                let mut p = [0u8; MAX_NAME_LEN];
+                let len = path.len().min(MAX_NAME_LEN - 1);
+                p[..len].copy_from_slice(path.as_bytes());
+                p[len] = b'/';
+                *slot = Some(MountEntry {
+                    path: p,
+                    path_len: len + 1,
+                    fs_type,
+                    mounted: true,
+                    root_inode: self.next_inode,
+                });
+                self.next_inode += 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn umount(&mut self, path: &str) -> bool {
+        for slot in self.mounts.iter_mut() {
+            if let Some(ref m) = slot {
+                let mut full = alloc::vec::Vec::new();
+                full.extend_from_slice(&m.path[..m.path_len]);
+                if full.len() > 0 && full[full.len() - 1] == b'/' {
+                    full.pop();
+                }
+                if core::str::from_utf8(&full).unwrap_or("") == path {
+                    *slot = None;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn lookup_mount(&self, path: &str) -> Option<&MountEntry> {
+        if path == "/" || path.is_empty() {
+            return self.mounts[0].as_ref();
+        }
+        let path_bytes = path.as_bytes();
+        for slot in self.mounts.iter() {
+            if let Some(ref m) = slot {
+                if m.mounted && path_bytes.starts_with(&m.path[..m.path_len]) {
+                    return Some(m);
+                }
+            }
+        }
+        self.mounts[0].as_ref()
     }
 }
 

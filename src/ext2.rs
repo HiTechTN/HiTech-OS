@@ -340,6 +340,9 @@ pub fn mount_root() -> bool {
     unsafe {
         if EXT2.read_superblock(&data) {
             *EXT2_DATA.lock() = Some(data);
+            let mut vfs = crate::vfs::VFS.lock();
+            vfs.mount("/", crate::vfs::FsType::Ext2);
+            drop(vfs);
             println!("  ext2 monte depuis ramdisk (racine inode 2)");
             true
         } else {

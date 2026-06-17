@@ -239,8 +239,12 @@ pub mod pci {
             }
         }
     }
-}
 
+    pub fn read_interrupt_line(bus: u8, device: u8, function: u8) -> u8 {
+        let val = read_address(bus, device, function, 0x3C);
+        (val & 0xff) as u8
+    }
+}
 pub mod apic {
     use super::*;
 
@@ -339,5 +343,10 @@ pub mod peci {
                 }
             }
         }
+    }
+
+    pub fn read_interrupt_line(bus: u8, device: u8, function: u8) -> u8 {
+        let val = read_address(bus, device, function, 0x3C);
+        (val & 0xff) as u8
     }
 }

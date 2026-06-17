@@ -78,9 +78,10 @@ impl Shell {
             b"ps" => self.cmd_ps(),
             b"kill" => self.cmd_kill(command),
             b"ifconfig" => self.cmd_ifconfig(),
-            b"ping" => self.cmd_ping(),
+            b"ping" => self.cmd_file(command, "ping"),
             b"netstat" => self.cmd_netstat(),
             b"dhclient" => self.cmd_dhclient(),
+            b"mount" => self.cmd_mount(),
             b"lspci" => self.cmd_lspci(),
             b"lsusb" => self.cmd_lsusb(),
             b"test" => self.cmd_test(),
@@ -101,6 +102,7 @@ impl Shell {
         println!("  Fichiers: ls, cat, mkdir, touch, rm, df");
         println!("  Processus: ps, kill");
         println!("  Reseau: ifconfig, ping, netstat, dhclient");
+        println!("  Disque: mount");
         println!("  Materiel: lspci, lsusb");
         println!("  Audio: beep, test");
         println!("  Graphique: clearcolor, draw");
@@ -183,10 +185,11 @@ impl Shell {
                 "mkdir" => crate::vfs::shell_commands::cmd_mkdir(&[name]),
                 "touch" => crate::vfs::shell_commands::cmd_touch(&[name]),
                 "rm" => crate::vfs::shell_commands::cmd_rm(&[name]),
+                "ping" => self.cmd_ping(name),
                 _ => {}
             }
         } else {
-            println!("Usage: {} <fichier>", op);
+            println!("Usage: {} <argument>", op);
         }
     }
 
@@ -249,8 +252,47 @@ impl Shell {
         }
     }
 
-    fn cmd_ping(&self) {
-        println!("ping: utilise 'ping <ip>' (pas encore integre)");
+    fn cmd_ping(&self, name: &str) {
+        use crate::network;
+        let mut octets = [0u8; 4];
+        let mut part = 0u8;
+        let mut idx = 0;
+        for c in name.bytes() {
+            if c == b'.' {
+                if idx >= 4 { println!("ping: IP invalide"); return; }
+                octets[idx] = part;
+                idx += 1;
+                part = 0;
+            } else if c >= b'0' && c <= b'9' {
+                part = part * 10 + (c - b'0');
+            } else {
+                println!("ping: IP invalide");
+                return;
+            }
+        }
+        if idx < 3 { println!("ping: IP invalide"); return; }
+        octets[idx] = part;
+        let dst_ip = octets;
+
+        println!("Pinging {}.{}.{}.{}...", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+        if !network::send_echo_request(&dst_ip, 0x1234, 1) {
+            println!("ping: echec envoi");
+            return;
+        }
+        *network::PING_REPLY.lock() = None;
+        for _ in 0..500 {
+            network::network_tick();
+            let reply = network::PING_REPLY.lock();
+            if let Some(ref p) = *reply {
+                if p.id == 0x1234 && p.seq == 1 {
+                    println!("Reponse de {}.{}.{}.{}: seq={}", p.reply_ip[0], p.reply_ip[1], p.reply_ip[2], p.reply_ip[3], p.seq);
+                    return;
+                }
+            }
+            drop(reply);
+            for _ in 0..10000 { core::hint::spin_loop(); }
+        }
+        println!("ping: delai d'attente depasse");
     }
 
     fn cmd_netstat(&self) {
@@ -280,6 +322,29 @@ impl Shell {
                     format_args!("{}.{}.{}.{}", c.dst_ip[0], c.dst_ip[1], c.dst_ip[2], c.dst_ip[3]),
                     c.dst_port,
                     state_str);
+            }
+        }
+    }
+
+    fn cmd_mount(&self) {
+        println!("Points de montage:");
+        let vfs = crate::vfs::VFS.lock();
+        for slot in vfs.mounts.iter() {
+            if let Some(ref m) = slot {
+                if m.mounted {
+                    let path = core::str::from_utf8(&m.path[..m.path_len]).unwrap_or("?");
+                    let fs = match m.fs_type {
+                        crate::vfs::FsType::Tmpfs => "tmpfs",
+                        crate::vfs::FsType::Ext2 => "ext2",
+                        crate::vfs::FsType::Devfs => "devfs",
+                    };
+                    println!("  {} {} (inode root: {})", fs, path, m.root_inode);
+                }
+            }
+        }
+        unsafe {
+            if crate::ext2::EXT2.mounted {
+                println!("  ext2 / (ext2 natif)");
             }
         }
     }

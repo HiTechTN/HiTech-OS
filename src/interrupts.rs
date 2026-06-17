@@ -16,6 +16,8 @@ fn set_idt_entry(idt: &mut InterruptDescriptorTable) {
     idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
     idt[InterruptIndex::Keyboard.as_usize()]
         .set_handler_fn(keyboard_interrupt_handler);
+    idt[InterruptIndex::Network.as_usize()]
+        .set_handler_fn(network_interrupt_handler);
 }
 
 lazy_static! {
@@ -58,11 +60,19 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     }
 }
 
+extern "x86-interrupt" fn network_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    crate::network::handle_nic_irq();
+    unsafe {
+        PICS.lock().notify_end_of_interrupt(InterruptIndex::Network.as_u8());
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     Keyboard = PIC_1_OFFSET + 1,
+    Network = PIC_1_OFFSET + 11,
 }
 
 impl InterruptIndex {

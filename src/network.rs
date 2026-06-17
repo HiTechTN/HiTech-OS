@@ -40,6 +40,7 @@ pub struct Rtl8139 {
     pub present: bool,
     pub io_base: u16,
     pub mac_address: [u8; 6],
+    pub irq_line: u8,
     tx_buffer: [[u8; TX_BUFFER_SIZE]; NUM_TX_BUFFERS],
     tx_dirty: [bool; NUM_TX_BUFFERS],
     rx_buffer: [u8; RX_BUFFER_SIZE],
@@ -52,6 +53,7 @@ impl Rtl8139 {
             present: false,
             io_base: RTL8139_IO_BASE,
             mac_address: [0; 6],
+            irq_line: 0,
             tx_buffer: [[0; TX_BUFFER_SIZE]; NUM_TX_BUFFERS],
             tx_dirty: [false; NUM_TX_BUFFERS],
             rx_buffer: [0; RX_BUFFER_SIZE],
@@ -113,6 +115,16 @@ impl Rtl8139 {
         unsafe { Port::<u8>::new(self.io_base + REG_CMD as u16).write(CMD_RX_ENABLE | CMD_TX_ENABLE); }
     }
 
+    pub fn enable_interrupts(&mut self) {
+        let imr: u16 = IMR_TOK | IMR_RER | IMR_TER;
+        unsafe { Port::<u16>::new(self.io_base + REG_IMR as u16).write(imr); }
+    }
+
+    pub fn clear_interrupt(&mut self) {
+        let isr = unsafe { Port::<u16>::new(self.io_base + REG_ISR as u16).read() };
+        unsafe { Port::<u16>::new(self.io_base + REG_ISR as u16).write(isr); }
+    }
+
     pub fn send_packet(&mut self, data: &[u8]) -> Result<(), NetworkError> {
         if data.len() > TX_BUFFER_SIZE {
             return Err(NetworkError::NoMemory);
@@ -171,29 +183,45 @@ pub static IP_ADDRESS: spin::Mutex<[u8; 4]> = spin::Mutex::new([0, 0, 0, 0]);
 pub fn init_network() -> Result<(), NetworkError> {
     println!("Recherche NIC RTL8139...");
 
-    let io_base = crate::pcie::find_device_by_id(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID)
-        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 0))
-        .map(|(addr, _is_io)| {
-            if addr > 0xffff {
-                println!("  BAR RTL8139 > 64KB, utilise defaut");
-                RTL8139_IO_BASE
-            } else {
-                addr as u16
-            }
+    let (io_base, irq_line) = crate::pcie::find_device_by_id(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID)
+        .map(|(b, d, f)| {
+            let bar = crate::acpi::pci::read_bar(b, d, f, 0);
+            let irq = crate::acpi::peci::read_interrupt_line(b, d, f);
+            (bar, irq)
+        })
+        .map(|(bar_opt, irq)| {
+            let io = bar_opt.map(|(addr, _is_io)| {
+                if addr > 0xffff { RTL8139_IO_BASE } else { addr as u16 }
+            }).unwrap_or(RTL8139_IO_BASE);
+            (io, irq)
         })
         .unwrap_or_else(|| {
             println!("  RTL8139 non trouve sur PCI, utilise bar par defaut");
-            RTL8139_IO_BASE
+            (RTL8139_IO_BASE, 11)
         });
 
     unsafe {
         NIC.init(io_base)?;
+        NIC.irq_line = irq_line;
+        NIC.enable_interrupts();
     }
     
     println!("  MAC: {}", unsafe { NIC.mac_str() });
+    println!("  IRQ: {}", irq_line);
     println!("  reseau initialise");
     
     Ok(())
+}
+
+pub fn handle_nic_irq() {
+    unsafe {
+        if !NIC.present { return; }
+        NIC.clear_interrupt();
+        let mut buf = [0u8; 1518];
+        while let Some(len) = NIC.receive_packet(&mut buf) {
+            process_incoming_packet(&buf[..len]);
+        }
+    }
 }
 
 pub fn set_ip_address(ip: [u8; 4]) {
@@ -255,6 +283,17 @@ pub fn process_incoming_packet(buffer: &[u8]) {
                     let ip_header_len = ((ip_header[0] & 0x0f) * 4) as usize;
                     let icmp_data = &buffer[14 + ip_header_len..];
                     if let Some(icmp) = icmp::IcmpHeader::parse(icmp_data) {
+                        if icmp.type_ == icmp::ICMP_TYPE_ECHO_REPLY {
+                            let id = (icmp.rest_of_header >> 16) as u16;
+                            let seq = icmp.rest_of_header as u16;
+                            let mut reply = PING_REPLY.lock();
+                            *reply = Some(PingInfo {
+                                id,
+                                seq,
+                                reply_ip: src_ip,
+                                rtt: 0,
+                            });
+                        }
                         if icmp.type_ == icmp::ICMP_TYPE_ECHO_REQUEST {
                             let mut reply_hdr = icmp::IcmpHeader {
                                 type_: icmp::ICMP_TYPE_ECHO_REPLY,
@@ -879,6 +918,9 @@ pub mod tcp {
         pub ack: u32,
         pub send_buf: alloc::vec::Vec<u8>,
         pub recv_buf: alloc::vec::Vec<u8>,
+        pub tx_buf: alloc::vec::Vec<u8>,
+        pub rto_ticks: u32,
+        pub rto_max: u32,
     }
 
     fn new_connection() -> TcpConnection {
@@ -892,6 +934,9 @@ pub mod tcp {
             ack: 0,
             send_buf: alloc::vec::Vec::new(),
             recv_buf: alloc::vec::Vec::new(),
+            tx_buf: alloc::vec::Vec::new(),
+            rto_ticks: 0,
+            rto_max: 0,
         }
     }
 
@@ -900,6 +945,48 @@ pub mod tcp {
             None, None, None, None, None, None, None, None,
             None, None, None, None, None, None, None, None,
         ]);
+
+    pub const MAX_LISTENERS: usize = 4;
+
+    pub use alloc::collections::VecDeque;
+
+    pub struct TcpListener {
+        pub port: u16,
+        pub backlog: VecDeque<u16>,
+    }
+
+    pub static TCP_LISTENERS: spin::Mutex<[Option<TcpListener>; MAX_LISTENERS]> =
+        spin::Mutex::new([None, None, None, None]);
+
+    pub fn alloc_listener(port: u16) -> Option<usize> {
+        let mut listeners = TCP_LISTENERS.lock();
+        for (i, slot) in listeners.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(TcpListener { port, backlog: VecDeque::new() });
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    pub fn free_listener(idx: usize) {
+        let mut listeners = TCP_LISTENERS.lock();
+        if let Some(slot) = listeners.get_mut(idx) {
+            *slot = None;
+        }
+    }
+
+    pub fn find_listener(port: u16) -> Option<usize> {
+        let listeners = TCP_LISTENERS.lock();
+        for (i, slot) in listeners.iter().enumerate() {
+            if let Some(ref l) = slot {
+                if l.port == port {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
 
     pub fn alloc_conn() -> Option<u16> {
         let mut table = TCP_TABLE.lock();
@@ -979,9 +1066,80 @@ pub mod tcp {
             let mut table = TCP_TABLE.lock();
             if let Some(Some(ref mut c)) = table.get_mut(conn_id as usize) {
                 c.seq = seq.wrapping_add(payload_len as u32 + if (flags & TCP_SYN) != 0 || (flags & TCP_FIN) != 0 { 1 } else { 0 });
+                if payload_len > 0 || (flags & TCP_SYN) != 0 || (flags & TCP_FIN) != 0 {
+                    c.tx_buf.clear();
+                    c.tx_buf.extend_from_slice(&segment);
+                    c.rto_ticks = 50;
+                    c.rto_max = 800;
+                }
             }
         }
         true
+    }
+
+    pub fn retransmit_check() {
+        let mut table = TCP_TABLE.lock();
+        for i in 0..table.len() {
+            if let Some(Some(ref mut c)) = table.get_mut(i) {
+                if c.rto_ticks > 0 && !c.tx_buf.is_empty() {
+                    if c.state == TCP_STATE_ESTABLISHED {
+                        c.rto_ticks = c.rto_ticks.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        drop(table);
+
+        let to_retransmit: alloc::vec::Vec<(u16, alloc::vec::Vec<u8>)> = {
+            let table = TCP_TABLE.lock();
+            table.iter().enumerate().filter_map(|(i, slot)| {
+                if let Some(c) = slot {
+                    if c.rto_ticks == 0 && !c.tx_buf.is_empty() {
+                        let state = c.state;
+                        if state == TCP_STATE_ESTABLISHED {
+                            return Some((i as u16, c.tx_buf.clone()));
+                        }
+                    }
+                }
+                None
+            }).collect()
+        };
+
+        for (id, seg) in to_retransmit {
+            let (src_ip, dst_ip) = {
+                let table = TCP_TABLE.lock();
+                let slot = table.get(id as usize).and_then(|s| s.as_ref());
+                match slot {
+                    Some(c) => (c.src_ip, c.dst_ip),
+                    None => continue,
+                }
+            };
+            let dst_mac = match crate::network::arp_resolve(&dst_ip) {
+                Some(m) => m,
+                None => continue,
+            };
+            let ip_h = crate::network::ipv4::Ipv4Header::new(src_ip, dst_ip, crate::network::ipv4::IP_PROTOCOL_TCP, seg.len() as u16);
+            let mut ip_b = ip_h.as_bytes();
+            let ip_c = crate::network::ipv4::Ipv4Header::calculate_checksum(&ip_b);
+            ip_b[10..12].copy_from_slice(&ip_c.to_be_bytes());
+            let mut ip_p = alloc::vec::Vec::new();
+            ip_p.extend_from_slice(&ip_b);
+            ip_p.extend_from_slice(&seg);
+            unsafe {
+                let nic_mac = crate::network::NIC.mac_address;
+                if let Some(frame) = crate::network::ethernet::build_frame(&dst_mac, &nic_mac,
+                    crate::network::ethernet::ETH_TYPE_IPV4, &ip_p) {
+                    let _ = crate::network::NIC.send_packet(&frame);
+                }
+            }
+            let mut table = TCP_TABLE.lock();
+            if let Some(Some(ref mut c)) = table.get_mut(id as usize) {
+                if c.rto_ticks == 0 && !c.tx_buf.is_empty() {
+                    c.rto_ticks = core::cmp::min(c.rto_max / 2, 200).max(5);
+                    c.rto_max = core::cmp::min(c.rto_max * 2, 1600);
+                }
+            }
+        }
     }
 
     pub fn handle_tcp_packet(data: &[u8], src_ip: &[u8; 4], dst_ip: &[u8; 4]) {
@@ -994,15 +1152,51 @@ pub mod tcp {
 
         let mut table = TCP_TABLE.lock();
         let mut conn_idx = None;
+        let mut is_listener = false;
         for (i, slot) in table.iter().enumerate() {
             if let Some(ref c) = slot {
                 if c.dst_port == tcp_hdr.dst_port && c.state != TCP_STATE_CLOSED {
                     if c.state == TCP_STATE_LISTEN || (c.src_port == tcp_hdr.dst_port && c.dst_port == tcp_hdr.src_port) {
                         conn_idx = Some(i);
+                        if c.state == TCP_STATE_LISTEN {
+                            is_listener = true;
+                        }
                         break;
                     }
                 }
             }
+        }
+
+        if is_listener && (flags & TCP_SYN) != 0 {
+            let src = *src_ip;
+            let dst = *dst_ip;
+            let src_port = tcp_hdr.dst_port;
+            let dst_port = tcp_hdr.src_port;
+            if let Some(new_id) = alloc_conn() {
+                {
+                    let mut t = TCP_TABLE.lock();
+                    if let Some(Some(ref mut nc)) = t.get_mut(new_id as usize) {
+                        nc.state = TCP_STATE_SYN_RECEIVED;
+                        nc.src_ip = dst;
+                        nc.dst_ip = src;
+                        nc.src_port = src_port;
+                        nc.dst_port = dst_port;
+                        nc.seq = 1000;
+                        nc.ack = tcp_hdr.seq_num.wrapping_add(1);
+                    }
+                }
+                send_segment(new_id, TCP_SYN | TCP_ACK, &[]);
+                let mut listeners = TCP_LISTENERS.lock();
+                for slot in listeners.iter_mut() {
+                    if let Some(ref mut l) = slot {
+                        if l.port == src_port {
+                            l.backlog.push_back(new_id);
+                            break;
+                        }
+                    }
+                }
+            }
+            return;
         }
 
         let idx = match conn_idx {
@@ -1055,24 +1249,13 @@ pub mod tcp {
         };
 
         match conn.state {
-            TCP_STATE_LISTEN => {
-                if (flags & TCP_SYN) != 0 {
-                    conn.src_ip = *dst_ip;
-                    conn.dst_ip = *src_ip;
-                    conn.src_port = tcp_hdr.dst_port;
-                    conn.dst_port = tcp_hdr.src_port;
-                    conn.seq = 1000;
-                    conn.ack = tcp_hdr.seq_num.wrapping_add(1);
-                    conn.state = TCP_STATE_SYN_RECEIVED;
-                    drop(table);
-                    send_segment(idx as u16, TCP_SYN | TCP_ACK, &[]);
-                }
-            }
             TCP_STATE_SYN_SENT => {
                 if (flags & TCP_SYN) != 0 && (flags & TCP_ACK) != 0 {
                     conn.ack = tcp_hdr.seq_num.wrapping_add(1);
                     conn.seq = conn.seq.wrapping_add(1);
                     conn.state = TCP_STATE_ESTABLISHED;
+                    conn.tx_buf.clear();
+                    conn.rto_ticks = 0;
                     drop(table);
                     send_segment(idx as u16, TCP_ACK, &[]);
                 }
@@ -1080,6 +1263,8 @@ pub mod tcp {
             TCP_STATE_SYN_RECEIVED => {
                 if (flags & TCP_ACK) != 0 {
                     conn.state = TCP_STATE_ESTABLISHED;
+                    conn.tx_buf.clear();
+                    conn.rto_ticks = 0;
                 }
             }
             TCP_STATE_ESTABLISHED => {
@@ -1091,8 +1276,13 @@ pub mod tcp {
                 } else if !payload.is_empty() {
                     conn.ack = tcp_hdr.seq_num.wrapping_add(payload.len() as u32);
                     conn.recv_buf.extend_from_slice(payload);
+                    conn.tx_buf.clear();
+                    conn.rto_ticks = 0;
                     drop(table);
                     send_segment(idx as u16, TCP_ACK, &[]);
+                } else if (flags & TCP_ACK) != 0 && !conn.tx_buf.is_empty() {
+                    conn.tx_buf.clear();
+                    conn.rto_ticks = 0;
                 }
             }
             TCP_STATE_FIN_WAIT_1 => {
@@ -1141,12 +1331,15 @@ pub mod tcp {
     }
 
     pub fn tcp_listen(port: u16) -> Option<u16> {
-        let id = alloc_conn()?;
-        let mut table = TCP_TABLE.lock();
-        let conn = table.get_mut(id as usize)?.as_mut()?;
-        conn.state = TCP_STATE_LISTEN;
-        conn.src_port = port;
-        Some(id)
+        let idx = alloc_listener(port)?;
+        Some(idx as u16)
+    }
+
+    pub fn tcp_accept(listener_idx: u16) -> Option<u16> {
+        let mut listeners = TCP_LISTENERS.lock();
+        let listener = listeners.get_mut(listener_idx as usize)?;
+        let l = listener.as_mut()?;
+        l.backlog.pop_front()
     }
 
     pub fn tcp_send(conn_id: u16, data: &[u8]) -> bool {
@@ -1224,6 +1417,52 @@ pub mod socket {
     }
 }
 
+pub static PING_REPLY: spin::Mutex<Option<PingInfo>> = spin::Mutex::new(None);
+
+pub struct PingInfo {
+    pub id: u16,
+    pub seq: u16,
+    pub reply_ip: [u8; 4],
+    pub rtt: u64,
+}
+
+pub fn send_echo_request(dst_ip: &[u8; 4], id: u16, seq: u16) -> bool {
+    let ip = IP_ADDRESS.lock();
+    let src_ip = *ip;
+    drop(ip);
+
+    let icmp_packet = icmp::IcmpHeader::new_request(id, seq);
+    let mut icmp_bytes = icmp_packet.to_bytes();
+    let checksum = icmp::IcmpHeader::calculate_checksum(&icmp_bytes);
+    icmp_bytes[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+    let ip_hdr = ipv4::Ipv4Header::new(src_ip, *dst_ip, ipv4::IP_PROTOCOL_ICMP, 8);
+    let mut ip_bytes = ip_hdr.as_bytes();
+    let ip_cs = ipv4::Ipv4Header::calculate_checksum(&ip_bytes);
+    ip_bytes[10..12].copy_from_slice(&ip_cs.to_be_bytes());
+
+    let mut ip_packet = alloc::vec::Vec::with_capacity(28);
+    ip_packet.extend_from_slice(&ip_bytes);
+    ip_packet.extend_from_slice(&icmp_bytes);
+
+    let dst_mac = match arp_resolve(dst_ip) {
+        Some(m) => m,
+        None => return false,
+    };
+    unsafe {
+        let nic_mac = NIC.mac_address;
+        if let Some(frame) = ethernet::build_frame(
+            &dst_mac, &nic_mac,
+            ethernet::ETH_TYPE_IPV4,
+            &ip_packet,
+        ) {
+            NIC.send_packet(&frame).is_ok()
+        } else {
+            false
+        }
+    }
+}
+
 pub fn network_tick() {
     unsafe {
         if !NIC.present {
@@ -1234,4 +1473,5 @@ pub fn network_tick() {
             process_incoming_packet(&buf[..len]);
         }
     }
+    crate::network::tcp::retransmit_check();
 }
