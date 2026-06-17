@@ -5,6 +5,9 @@ pub const MAX_TASKS: usize = 16;
 pub const KERNEL_STACK_SIZE: usize = 16384;
 pub const USER_STACK_SIZE: usize = 16384;
 
+pub const KERNEL_CS: u16 = 0x8;
+pub const KERNEL_SS: u16 = 0x10;
+
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum TaskState {
     Ready,
@@ -54,9 +57,8 @@ pub struct Task {
 }
 
 impl Task {
-    pub fn new(id: u8, _ip: fn(), ppid: u32) -> Task {
-        let _stack_bottom = id as usize * KERNEL_STACK_SIZE;
-        Task {
+    pub fn new(id: u8, ip: fn(), ppid: u32) -> Task {
+        let mut task = Task {
             id,
             pid: id as u32,
             ppid,
@@ -68,7 +70,27 @@ impl Task {
             user_stack: [0; USER_STACK_SIZE],
             exit_code: 0,
             creation_time: 0,
+        };
+        task.setup_entry(ip);
+        task
+    }
+
+    fn setup_entry(&mut self, ip: fn()) {
+        let stack_top = self.kernel_stack.as_ptr() as u64 + KERNEL_STACK_SIZE as u64;
+        let stack_top = stack_top & !15;
+        unsafe {
+            let sp = stack_top as *mut u64;
+            sp.offset(-1).write(KERNEL_SS as u64);
+            sp.offset(-2).write(stack_top);
+            sp.offset(-3).write(0x202);
+            sp.offset(-4).write(KERNEL_CS as u64);
+            sp.offset(-5).write(ip as u64);
         }
+        self.context.rsp = stack_top - 40;
+        self.context.rip = ip as u64;
+        self.context.cs = KERNEL_CS;
+        self.context.ss = KERNEL_SS;
+        self.context.rflags = 0x202;
     }
 }
 
@@ -110,6 +132,40 @@ pub static CURRENT_TASK: Mutex<u8> = Mutex::new(0);
 
 pub fn init_scheduler() {
     println!("Scheduler initialise (max {} taches)", MAX_TASKS);
+}
+
+pub fn preempt_schedule(current_rsp: u64) -> u64 {
+    let count = *TASK_COUNT.lock() as usize;
+    if count <= 1 {
+        return current_rsp;
+    }
+
+    let current = *CURRENT_TASK.lock() as usize;
+    let mut next = (current + 1) % count;
+
+    let new_rsp;
+    {
+        let mut tasks = TASKS.lock();
+        if let Some(ref mut task) = tasks[current] {
+            task.context.rsp = current_rsp;
+            task.state = TaskState::Ready;
+        }
+        for _ in 0..count {
+            if let Some(ref task) = tasks[next] {
+                if task.state == TaskState::Ready || task.state == TaskState::Running {
+                    break;
+                }
+            }
+            next = (next + 1) % count;
+        }
+        new_rsp = tasks[next].as_ref().map_or(current_rsp, |t| t.context.rsp);
+    }
+
+    if let Some(ref mut task) = TASKS.lock()[next] {
+        task.state = TaskState::Running;
+    }
+    *CURRENT_TASK.lock() = next as u8;
+    new_rsp
 }
 
 pub mod scheduler {

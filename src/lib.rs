@@ -50,6 +50,7 @@ pub mod signal;
 pub mod console;
 pub mod rng;
 pub mod resource;
+pub mod ramdisk;
 
 pub const VERSION: &str = "0.8.0";
 pub const BUILD_DATE: &str = "2026-06-17";
@@ -86,6 +87,7 @@ pub fn init() {
     fat32::init_fat32();
     ntfs::init_ntfs();
     crypto::init_crypto();
+    ramdisk::init_ramdisk();
     block::init_block_io();
     pagecache::init_page_cache();
     init::init_init();

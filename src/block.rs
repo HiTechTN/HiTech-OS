@@ -211,7 +211,36 @@ impl BlockIoLayer {
 pub static mut BLOCK_IO: BlockIoLayer = BlockIoLayer::new();
 
 pub fn init_block_io() {
+    unsafe {
+        if crate::ramdisk::RAMDISK_PRESENT.load(core::sync::atomic::Ordering::SeqCst) {
+            let major = BLOCK_IO.register_device("ramdisk0", BlockDeviceType::RamDisk);
+            println!("  Ramdisk registered as major {}", major);
+        }
+    }
     println!("Block I/O: initialise");
+}
+
+pub fn read_device_blocks(major: u8, block: u64, buf: &mut [u8; BLOCK_SIZE]) -> bool {
+    match major {
+        0 => crate::ramdisk::read_block(block as usize, buf),
+        1 => {
+            crate::disk::ata_driver::read_sector(false, block, buf).is_ok()
+        }
+        _ => {
+            buf.fill(0);
+            false
+        }
+    }
+}
+
+pub fn write_device_blocks(major: u8, block: u64, buf: &[u8; BLOCK_SIZE]) -> bool {
+    match major {
+        0 => crate::ramdisk::write_block(block as usize, buf),
+        1 => {
+            crate::disk::ata_driver::write_sector(false, block, buf).is_ok()
+        }
+        _ => false
+    }
 }
 
 pub mod requests {
@@ -242,20 +271,29 @@ pub mod requests {
             match self.direction {
                 BioDirection::Read => {
                     for i in 0..self.count {
-                        let _block = self.start_block + i as u64;
+                        let block = self.start_block + i as u64;
                         let buf = unsafe {
-                            core::slice::from_raw_parts_mut(self.buffer.add(i as usize * BLOCK_SIZE), BLOCK_SIZE)
+                            &mut *(self.buffer.add(i as usize * BLOCK_SIZE) as *mut [u8; BLOCK_SIZE])
                         };
-                        buf.fill(0);
+                        if !super::read_device_blocks(self.device, block, buf) {
+                            return false;
+                        }
                     }
                     true
                 }
                 BioDirection::Write => {
+                    for i in 0..self.count {
+                        let block = self.start_block + i as u64;
+                        let buf = unsafe {
+                            &*(self.buffer.add(i as usize * BLOCK_SIZE) as *const [u8; BLOCK_SIZE])
+                        };
+                        if !super::write_device_blocks(self.device, block, buf) {
+                            return false;
+                        }
+                    }
                     true
                 }
-                BioDirection::Flush => {
-                    true
-                }
+                BioDirection::Flush => true,
             }
         }
     }
