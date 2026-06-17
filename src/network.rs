@@ -287,6 +287,12 @@ pub fn process_incoming_packet(buffer: &[u8]) {
                             }
                         }
                     }
+                } else if protocol == ipv4::IP_PROTOCOL_TCP && buffer.len() >= 54 {
+                    let ip_header_len = ((ip_header[0] & 0x0f) * 4) as usize;
+                    let tcp_data = &buffer[14 + ip_header_len..];
+                    tcp::handle_tcp_packet(tcp_data, &src_ip, &dst_ip);
+                } else if protocol == ipv4::IP_PROTOCOL_UDP && buffer.len() >= 42 {
+                    // UDP dispatch — packets received but no handler binding yet
                 }
             }
             _ => {}
@@ -463,11 +469,11 @@ pub mod ethernet {
             if data.len() < 14 {
                 return None;
             }
-            
+
             Some(EthernetHeader {
                 dst: data[0..6].try_into().ok()?,
                 src: data[6..12].try_into().ok()?,
-                ethertype: (data[12] as u16) | ((data[13] as u16) << 8),
+                ethertype: u16::from_be_bytes([data[12], data[13]]),
             })
         }
     }
@@ -476,8 +482,7 @@ pub mod ethernet {
         let mut packet = Vec::with_capacity(14 + payload.len());
         packet.extend_from_slice(dst);
         packet.extend_from_slice(src);
-        packet.push((ethertype & 0xff) as u8);
-        packet.push(((ethertype >> 8) & 0xff) as u8);
+        packet.extend_from_slice(&ethertype.to_be_bytes());
         packet.extend_from_slice(payload);
         Some(packet)
     }
@@ -531,7 +536,11 @@ pub mod ipv4 {
         pub fn calculate_checksum(data: &[u8]) -> u16 {
             let mut sum: u32 = 0;
             for i in (0..data.len()).step_by(2) {
-                let word = (data[i] as u32) | ((if i+1 < data.len() { data[i+1] } else { 0 }) as u32) << 8;
+                let word = if i + 1 < data.len() {
+                    u16::from_be_bytes([data[i], data[i + 1]]) as u32
+                } else {
+                    (data[i] as u32) << 8
+                };
                 sum += word;
             }
             while sum >> 16 != 0 {
@@ -544,12 +553,9 @@ pub mod ipv4 {
             let mut bytes = [0u8; 20];
             bytes[0] = self.version_ihl;
             bytes[1] = self.tos;
-            bytes[2] = (self.total_length & 0xff) as u8;
-            bytes[3] = ((self.total_length >> 8) & 0xff) as u8;
-            bytes[4] = (self.identification & 0xff) as u8;
-            bytes[5] = ((self.identification >> 8) & 0xff) as u8;
-            bytes[6] = (self.flags_fragment & 0xff) as u8;
-            bytes[7] = ((self.flags_fragment >> 8) & 0xff) as u8;
+            bytes[2..4].copy_from_slice(&self.total_length.to_be_bytes());
+            bytes[4..6].copy_from_slice(&self.identification.to_be_bytes());
+            bytes[6..8].copy_from_slice(&self.flags_fragment.to_be_bytes());
             bytes[8] = self.ttl;
             bytes[9] = self.protocol;
             bytes[10] = 0;
@@ -605,9 +611,9 @@ pub mod icmp {
             let mut sum: u32 = 0;
             for i in (0..data.len()).step_by(2) {
                 let word = if i + 1 < data.len() {
-                    (data[i] as u32) | ((data[i + 1] as u32) << 8)
+                    u16::from_be_bytes([data[i], data[i + 1]]) as u32
                 } else {
-                    data[i] as u32
+                    (data[i] as u32) << 8
                 };
                 sum += word;
             }
@@ -638,6 +644,582 @@ pub mod udp {
                 length: UDP_HEADER_SIZE as u16 + payload_len,
                 checksum: 0,
             }
+        }
+    }
+
+    pub fn parse(data: &[u8]) -> Option<UdpHeader> {
+        if data.len() < 8 {
+            return None;
+        }
+        Some(UdpHeader {
+            src_port: u16::from_be_bytes([data[0], data[1]]),
+            dst_port: u16::from_be_bytes([data[2], data[3]]),
+            length: u16::from_be_bytes([data[4], data[5]]),
+            checksum: u16::from_be_bytes([data[6], data[7]]),
+        })
+    }
+
+    pub fn to_bytes(hdr: &UdpHeader) -> [u8; 8] {
+        let mut buf = [0u8; 8];
+        buf[0..2].copy_from_slice(&hdr.src_port.to_be_bytes());
+        buf[2..4].copy_from_slice(&hdr.dst_port.to_be_bytes());
+        buf[4..6].copy_from_slice(&hdr.length.to_be_bytes());
+        buf[6..8].copy_from_slice(&hdr.checksum.to_be_bytes());
+        buf
+    }
+
+    pub fn pseudo_checksum(src_ip: &[u8; 4], dst_ip: &[u8; 4], udp_len: u16) -> u32 {
+        let mut sum: u32 = 0;
+        for i in (0..4).step_by(2) {
+            sum += u16::from_be_bytes([src_ip[i], src_ip[i + 1]]) as u32;
+            sum += u16::from_be_bytes([dst_ip[i], dst_ip[i + 1]]) as u32;
+        }
+        sum += 0u16 as u32;
+        sum += crate::network::ipv4::IP_PROTOCOL_UDP as u32;
+        sum += udp_len as u32;
+        sum
+    }
+
+    pub fn compute_checksum(src_ip: &[u8; 4], dst_ip: &[u8; 4], hdr: &UdpHeader, payload: &[u8]) -> u16 {
+        let mut sum = pseudo_checksum(src_ip, dst_ip, hdr.length);
+        let hb = to_bytes(hdr);
+        for i in (0..8).step_by(2) {
+            sum += u16::from_be_bytes([hb[i], hb[i + 1]]) as u32;
+        }
+        for i in (0..payload.len()).step_by(2) {
+            let w = if i + 1 < payload.len() {
+                u16::from_be_bytes([payload[i], payload[i + 1]]) as u32
+            } else {
+                (payload[i] as u32) << 8
+            };
+            sum += w;
+        }
+        while sum >> 16 != 0 {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        !(sum as u16)
+    }
+
+    pub fn send_packet(dst_ip: &[u8; 4], dst_port: u16, src_port: u16, payload: &[u8]) -> Option<()> {
+        let ip = crate::network::IP_ADDRESS.lock();
+        let src_ip = *ip;
+        drop(ip);
+
+        let hdr = UdpHeader::new(src_port, dst_port, payload.len() as u16);
+        let checksum = compute_checksum(&src_ip, dst_ip, &hdr, payload);
+        let mut hdr_cs = hdr;
+        hdr_cs.checksum = checksum;
+        let hb = to_bytes(&hdr_cs);
+
+        let mut udp_data = alloc::vec::Vec::with_capacity(8 + payload.len());
+        udp_data.extend_from_slice(&hb);
+        udp_data.extend_from_slice(payload);
+
+        let ip_hdr = crate::network::ipv4::Ipv4Header::new(
+            src_ip, *dst_ip,
+            crate::network::ipv4::IP_PROTOCOL_UDP,
+            udp_data.len() as u16,
+        );
+        let mut ip_bytes = ip_hdr.as_bytes();
+        let ip_cs = crate::network::ipv4::Ipv4Header::calculate_checksum(&ip_bytes);
+        ip_bytes[10..12].copy_from_slice(&ip_cs.to_be_bytes());
+
+        let mut ip_pkt = alloc::vec::Vec::with_capacity(20 + udp_data.len());
+        ip_pkt.extend_from_slice(&ip_bytes);
+        ip_pkt.extend_from_slice(&udp_data);
+
+        let dst_mac = crate::network::arp_resolve(dst_ip)?;
+        unsafe {
+            let nic_mac = crate::network::NIC.mac_address;
+            let frame = crate::network::ethernet::build_frame(
+                &dst_mac, &nic_mac,
+                crate::network::ethernet::ETH_TYPE_IPV4,
+                &ip_pkt,
+            )?;
+            crate::network::NIC.send_packet(&frame).ok()
+        }
+    }
+}
+
+pub mod tcp {
+
+    pub const TCP_FIN: u8 = 0x01;
+    pub const TCP_SYN: u8 = 0x02;
+    pub const TCP_RST: u8 = 0x04;
+    pub const TCP_PSH: u8 = 0x08;
+    pub const TCP_ACK: u8 = 0x10;
+    pub const TCP_URG: u8 = 0x20;
+
+    pub const TCP_STATE_CLOSED: u8 = 0;
+    pub const TCP_STATE_LISTEN: u8 = 1;
+    pub const TCP_STATE_SYN_SENT: u8 = 2;
+    pub const TCP_STATE_SYN_RECEIVED: u8 = 3;
+    pub const TCP_STATE_ESTABLISHED: u8 = 4;
+    pub const TCP_STATE_FIN_WAIT_1: u8 = 5;
+    pub const TCP_STATE_FIN_WAIT_2: u8 = 6;
+    pub const TCP_STATE_CLOSE_WAIT: u8 = 7;
+    pub const TCP_STATE_CLOSING: u8 = 8;
+    pub const TCP_STATE_LAST_ACK: u8 = 9;
+    pub const TCP_STATE_TIME_WAIT: u8 = 10;
+
+    pub const MAX_TCP_CONNS: usize = 16;
+    pub const TCP_WINDOW: u16 = 65535;
+
+    #[derive(Copy, Clone)]
+    pub struct TcpHeader {
+        pub src_port: u16,
+        pub dst_port: u16,
+        pub seq_num: u32,
+        pub ack_num: u32,
+        pub data_offset_reserved_flags: u16,
+        pub window: u16,
+        pub checksum: u16,
+        pub urgent: u16,
+    }
+
+    impl TcpHeader {
+        pub fn data_offset(&self) -> usize {
+            ((self.data_offset_reserved_flags >> 12) as usize) * 4
+        }
+
+        pub fn flags(&self) -> u8 {
+            (self.data_offset_reserved_flags & 0x3f) as u8
+        }
+
+        pub fn set_flags(&mut self, flags: u8) {
+            self.data_offset_reserved_flags = (self.data_offset_reserved_flags & 0xffc0) | flags as u16;
+        }
+
+        pub fn has_flag(&self, flag: u8) -> bool {
+            self.flags() & flag != 0
+        }
+    }
+
+    pub fn parse_tcp_header(data: &[u8]) -> Option<TcpHeader> {
+        if data.len() < 20 {
+            return None;
+        }
+        Some(TcpHeader {
+            src_port: u16::from_be_bytes([data[0], data[1]]),
+            dst_port: u16::from_be_bytes([data[2], data[3]]),
+            seq_num: u32::from_be_bytes([data[4], data[5], data[6], data[7]]),
+            ack_num: u32::from_be_bytes([data[8], data[9], data[10], data[11]]),
+            data_offset_reserved_flags: u16::from_be_bytes([data[12], data[13]]),
+            window: u16::from_be_bytes([data[14], data[15]]),
+            checksum: u16::from_be_bytes([data[16], data[17]]),
+            urgent: u16::from_be_bytes([data[18], data[19]]),
+        })
+    }
+
+    pub fn tcp_to_bytes(hdr: &TcpHeader) -> [u8; 20] {
+        let mut buf = [0u8; 20];
+        buf[0..2].copy_from_slice(&hdr.src_port.to_be_bytes());
+        buf[2..4].copy_from_slice(&hdr.dst_port.to_be_bytes());
+        buf[4..8].copy_from_slice(&hdr.seq_num.to_be_bytes());
+        buf[8..12].copy_from_slice(&hdr.ack_num.to_be_bytes());
+        buf[12..14].copy_from_slice(&hdr.data_offset_reserved_flags.to_be_bytes());
+        buf[14..16].copy_from_slice(&hdr.window.to_be_bytes());
+        buf[16..18].copy_from_slice(&hdr.checksum.to_be_bytes());
+        buf[18..20].copy_from_slice(&hdr.urgent.to_be_bytes());
+        buf
+    }
+
+    pub fn tcp_pseudo_cs(src_ip: &[u8; 4], dst_ip: &[u8; 4], tcp_len: u16) -> u32 {
+        let mut sum: u32 = 0;
+        for i in (0..4).step_by(2) {
+            sum += u16::from_be_bytes([src_ip[i], src_ip[i + 1]]) as u32;
+            sum += u16::from_be_bytes([dst_ip[i], dst_ip[i + 1]]) as u32;
+        }
+        sum += 0u16 as u32;
+        sum += crate::network::ipv4::IP_PROTOCOL_TCP as u32;
+        sum += tcp_len as u32;
+        sum
+    }
+
+    pub fn tcp_compute_cs(src_ip: &[u8; 4], dst_ip: &[u8; 4], hdr: &TcpHeader, payload: &[u8]) -> u16 {
+        let total_len = 20 + payload.len();
+        let mut sum = tcp_pseudo_cs(src_ip, dst_ip, total_len as u16);
+        let hb = tcp_to_bytes(hdr);
+        for i in (0..20).step_by(2) {
+            sum += u16::from_be_bytes([hb[i], hb[i + 1]]) as u32;
+        }
+        for i in (0..payload.len()).step_by(2) {
+            let w = if i + 1 < payload.len() {
+                u16::from_be_bytes([payload[i], payload[i + 1]]) as u32
+            } else {
+                (payload[i] as u32) << 8
+            };
+            sum += w;
+        }
+        while sum >> 16 != 0 {
+            sum = (sum & 0xffff) + (sum >> 16);
+        }
+        !(sum as u16)
+    }
+
+    pub struct TcpConnection {
+        pub state: u8,
+        pub src_ip: [u8; 4],
+        pub dst_ip: [u8; 4],
+        pub src_port: u16,
+        pub dst_port: u16,
+        pub seq: u32,
+        pub ack: u32,
+        pub send_buf: alloc::vec::Vec<u8>,
+        pub recv_buf: alloc::vec::Vec<u8>,
+    }
+
+    fn new_connection() -> TcpConnection {
+        TcpConnection {
+            state: TCP_STATE_CLOSED,
+            src_ip: [0; 4],
+            dst_ip: [0; 4],
+            src_port: 0,
+            dst_port: 0,
+            seq: 0,
+            ack: 0,
+            send_buf: alloc::vec::Vec::new(),
+            recv_buf: alloc::vec::Vec::new(),
+        }
+    }
+
+    pub static TCP_TABLE: spin::Mutex<[Option<TcpConnection>; MAX_TCP_CONNS]> =
+        spin::Mutex::new([
+            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None,
+        ]);
+
+    pub fn alloc_conn() -> Option<u16> {
+        let mut table = TCP_TABLE.lock();
+        for (i, slot) in table.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(new_connection());
+                return Some(i as u16);
+            }
+        }
+        None
+    }
+
+    pub fn free_conn(id: u16) {
+        let mut table = TCP_TABLE.lock();
+        if let Some(slot) = table.get_mut(id as usize) {
+            *slot = None;
+        }
+    }
+
+    fn send_segment(conn_id: u16, flags: u8, payload: &[u8]) -> bool {
+        let (src_ip, dst_ip, src_port, dst_port, seq, ack) = {
+            let table = TCP_TABLE.lock();
+            let slot = match table.get(conn_id as usize) {
+                Some(Some(c)) => c,
+                _ => return false,
+            };
+            (slot.src_ip, slot.dst_ip, slot.src_port, slot.dst_port, slot.seq, slot.ack)
+        };
+
+        let payload_len = payload.len() as u16;
+        let data_offset: u16 = (20 / 4) as u16;
+        let tcp_hdr = TcpHeader {
+            src_port,
+            dst_port,
+            seq_num: seq,
+            ack_num: ack,
+            data_offset_reserved_flags: (data_offset << 12) | flags as u16,
+            window: TCP_WINDOW,
+            checksum: 0,
+            urgent: 0,
+        };
+        let cs = tcp_compute_cs(&src_ip, &dst_ip, &tcp_hdr, payload);
+        let mut hdr_cs = tcp_hdr;
+        hdr_cs.checksum = cs;
+        let hdr_bytes = tcp_to_bytes(&hdr_cs);
+
+        let mut segment = alloc::vec::Vec::with_capacity(20 + payload.len());
+        segment.extend_from_slice(&hdr_bytes);
+        segment.extend_from_slice(payload);
+
+        let ip_hdr = crate::network::ipv4::Ipv4Header::new(
+            src_ip, dst_ip,
+            crate::network::ipv4::IP_PROTOCOL_TCP,
+            segment.len() as u16,
+        );
+        let mut ip_bytes = ip_hdr.as_bytes();
+        let ip_cs = crate::network::ipv4::Ipv4Header::calculate_checksum(&ip_bytes);
+        ip_bytes[10..12].copy_from_slice(&ip_cs.to_be_bytes());
+        let mut ip_packet = alloc::vec::Vec::with_capacity(20 + segment.len());
+        ip_packet.extend_from_slice(&ip_bytes);
+        ip_packet.extend_from_slice(&segment);
+
+        if let Some(dst_mac) = crate::network::arp_resolve(&dst_ip) {
+            unsafe {
+                let nic_mac = crate::network::NIC.mac_address;
+                if let Some(frame) = crate::network::ethernet::build_frame(
+                    &dst_mac, &nic_mac,
+                    crate::network::ethernet::ETH_TYPE_IPV4,
+                    &ip_packet,
+                ) {
+                    let _ = crate::network::NIC.send_packet(&frame);
+                }
+            }
+        }
+
+        if (flags & TCP_SYN) != 0 || (flags & TCP_FIN) != 0 || payload_len > 0 {
+            let mut table = TCP_TABLE.lock();
+            if let Some(Some(ref mut c)) = table.get_mut(conn_id as usize) {
+                c.seq = seq.wrapping_add(payload_len as u32 + if (flags & TCP_SYN) != 0 || (flags & TCP_FIN) != 0 { 1 } else { 0 });
+            }
+        }
+        true
+    }
+
+    pub fn handle_tcp_packet(data: &[u8], src_ip: &[u8; 4], dst_ip: &[u8; 4]) {
+        let tcp_hdr = match parse_tcp_header(data) {
+            Some(h) => h,
+            None => return,
+        };
+        let payload = &data[tcp_hdr.data_offset()..];
+        let flags = tcp_hdr.flags();
+
+        let mut table = TCP_TABLE.lock();
+        let mut conn_idx = None;
+        for (i, slot) in table.iter().enumerate() {
+            if let Some(ref c) = slot {
+                if c.dst_port == tcp_hdr.dst_port && c.state != TCP_STATE_CLOSED {
+                    if c.state == TCP_STATE_LISTEN || (c.src_port == tcp_hdr.dst_port && c.dst_port == tcp_hdr.src_port) {
+                        conn_idx = Some(i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        let idx = match conn_idx {
+            Some(i) => i,
+            None => {
+                if (flags & TCP_RST) == 0 {
+                    let src = src_ip;
+                    let dst = dst_ip;
+                    let rst_hdr = TcpHeader {
+                        src_port: tcp_hdr.dst_port,
+                        dst_port: tcp_hdr.src_port,
+                        seq_num: 0,
+                        ack_num: tcp_hdr.seq_num.wrapping_add(1),
+                        data_offset_reserved_flags: ((20 / 4) as u16) << 12 | (TCP_RST | TCP_ACK) as u16,
+                        window: TCP_WINDOW,
+                        checksum: 0,
+                        urgent: 0,
+                    };
+                    let cs = tcp_compute_cs(src, dst, &rst_hdr, &[]);
+                    let mut hdr_cs = rst_hdr;
+                    hdr_cs.checksum = cs;
+                    let hb = tcp_to_bytes(&hdr_cs);
+                    let mut seg = alloc::vec::Vec::new();
+                    seg.extend_from_slice(&hb);
+                    let ip_h = crate::network::ipv4::Ipv4Header::new(*src, *dst, crate::network::ipv4::IP_PROTOCOL_TCP, 20);
+                    let mut ip_b = ip_h.as_bytes();
+                    let ip_c = crate::network::ipv4::Ipv4Header::calculate_checksum(&ip_b);
+                    ip_b[10..12].copy_from_slice(&ip_c.to_be_bytes());
+                    let mut ip_p = alloc::vec::Vec::new();
+                    ip_p.extend_from_slice(&ip_b);
+                    ip_p.extend_from_slice(&seg);
+                    if let Some(dst_mac) = crate::network::arp_resolve(dst) {
+                        unsafe {
+                            let nic_mac = crate::network::NIC.mac_address;
+                            if let Some(frame) = crate::network::ethernet::build_frame(&dst_mac, &nic_mac,
+                                crate::network::ethernet::ETH_TYPE_IPV4, &ip_p) {
+                                let _ = crate::network::NIC.send_packet(&frame);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+        };
+
+        let slot = &mut table[idx];
+        let conn = match slot.as_mut() {
+            Some(c) => c,
+            None => return,
+        };
+
+        match conn.state {
+            TCP_STATE_LISTEN => {
+                if (flags & TCP_SYN) != 0 {
+                    conn.src_ip = *dst_ip;
+                    conn.dst_ip = *src_ip;
+                    conn.src_port = tcp_hdr.dst_port;
+                    conn.dst_port = tcp_hdr.src_port;
+                    conn.seq = 1000;
+                    conn.ack = tcp_hdr.seq_num.wrapping_add(1);
+                    conn.state = TCP_STATE_SYN_RECEIVED;
+                    drop(table);
+                    send_segment(idx as u16, TCP_SYN | TCP_ACK, &[]);
+                }
+            }
+            TCP_STATE_SYN_SENT => {
+                if (flags & TCP_SYN) != 0 && (flags & TCP_ACK) != 0 {
+                    conn.ack = tcp_hdr.seq_num.wrapping_add(1);
+                    conn.seq = conn.seq.wrapping_add(1);
+                    conn.state = TCP_STATE_ESTABLISHED;
+                    drop(table);
+                    send_segment(idx as u16, TCP_ACK, &[]);
+                }
+            }
+            TCP_STATE_SYN_RECEIVED => {
+                if (flags & TCP_ACK) != 0 {
+                    conn.state = TCP_STATE_ESTABLISHED;
+                }
+            }
+            TCP_STATE_ESTABLISHED => {
+                if (flags & TCP_FIN) != 0 {
+                    conn.ack = tcp_hdr.seq_num.wrapping_add(1);
+                    conn.state = TCP_STATE_CLOSE_WAIT;
+                    drop(table);
+                    send_segment(idx as u16, TCP_ACK, &[]);
+                } else if !payload.is_empty() {
+                    conn.ack = tcp_hdr.seq_num.wrapping_add(payload.len() as u32);
+                    conn.recv_buf.extend_from_slice(payload);
+                    drop(table);
+                    send_segment(idx as u16, TCP_ACK, &[]);
+                }
+            }
+            TCP_STATE_FIN_WAIT_1 => {
+                if (flags & TCP_ACK) != 0 {
+                    conn.state = TCP_STATE_FIN_WAIT_2;
+                }
+                if (flags & TCP_FIN) != 0 {
+                    conn.state = TCP_STATE_CLOSING;
+                }
+            }
+            TCP_STATE_FIN_WAIT_2 => {
+                if (flags & TCP_FIN) != 0 {
+                    conn.ack = tcp_hdr.seq_num.wrapping_add(1);
+                    conn.state = TCP_STATE_TIME_WAIT;
+                    drop(table);
+                    send_segment(idx as u16, TCP_ACK, &[]);
+                }
+            }
+            TCP_STATE_CLOSE_WAIT => {}
+            TCP_STATE_CLOSING | TCP_STATE_LAST_ACK => {
+                if (flags & TCP_ACK) != 0 {
+                    conn.state = TCP_STATE_CLOSED;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn tcp_connect(src_port: u16, dst_ip: [u8; 4], dst_port: u16) -> Option<u16> {
+        let id = alloc_conn()?;
+        {
+            let mut table = TCP_TABLE.lock();
+            let conn = table.get_mut(id as usize)?.as_mut()?;
+            conn.state = TCP_STATE_SYN_SENT;
+            let ip = crate::network::IP_ADDRESS.lock();
+            conn.src_ip = *ip;
+            drop(ip);
+            conn.dst_ip = dst_ip;
+            conn.src_port = src_port;
+            conn.dst_port = dst_port;
+            conn.seq = 1000;
+            conn.ack = 0;
+        }
+        send_segment(id, TCP_SYN, &[]);
+        Some(id)
+    }
+
+    pub fn tcp_listen(port: u16) -> Option<u16> {
+        let id = alloc_conn()?;
+        let mut table = TCP_TABLE.lock();
+        let conn = table.get_mut(id as usize)?.as_mut()?;
+        conn.state = TCP_STATE_LISTEN;
+        conn.src_port = port;
+        Some(id)
+    }
+
+    pub fn tcp_send(conn_id: u16, data: &[u8]) -> bool {
+        send_segment(conn_id, TCP_PSH | TCP_ACK, data)
+    }
+
+    pub fn tcp_recv(conn_id: u16, buf: &mut [u8]) -> Option<usize> {
+        let mut table = TCP_TABLE.lock();
+        let conn = table.get_mut(conn_id as usize)?.as_mut()?;
+        if conn.recv_buf.is_empty() {
+            return None;
+        }
+        let len = conn.recv_buf.len().min(buf.len());
+        buf[..len].copy_from_slice(&conn.recv_buf[..len]);
+        conn.recv_buf.drain(..len);
+        Some(len)
+    }
+
+    pub fn tcp_close(conn_id: u16) {
+        send_segment(conn_id, TCP_FIN | TCP_ACK, &[]);
+        let mut table = TCP_TABLE.lock();
+        if let Some(Some(ref mut c)) = table.get_mut(conn_id as usize) {
+            if c.state == TCP_STATE_ESTABLISHED || c.state == TCP_STATE_CLOSE_WAIT {
+                c.state = TCP_STATE_FIN_WAIT_1;
+            }
+        }
+    }
+}
+
+pub mod socket {
+    use crate::network::tcp;
+
+    pub const SOCK_TYPE_TCP: u8 = 0;
+    pub const SOCK_TYPE_UDP: u8 = 1;
+
+    pub fn create_socket(sock_type: u8, local_port: u16) -> Option<u16> {
+        match sock_type {
+            SOCK_TYPE_TCP => tcp::tcp_listen(local_port),
+            SOCK_TYPE_UDP => Some(local_port as u16),
+            _ => None,
+        }
+    }
+
+    pub fn connect(sock_id: u16, dst_ip: [u8; 4], dst_port: u16) -> bool {
+        let src_port = {
+            let table = tcp::TCP_TABLE.lock();
+            let mut found = None;
+            for (i, slot) in table.iter().enumerate() {
+                if let Some(ref c) = slot {
+                    if i as u16 == sock_id && c.state == tcp::TCP_STATE_LISTEN {
+                        found = Some(c.src_port);
+                        break;
+                    }
+                }
+            }
+            found
+        };
+        if let Some(port) = src_port {
+            tcp::tcp_connect(port, dst_ip, dst_port).is_some()
+        } else {
+            false
+        }
+    }
+
+    pub fn send(sock_id: u16, data: &[u8]) -> bool {
+        tcp::tcp_send(sock_id, data)
+    }
+
+    pub fn recv(sock_id: u16, buf: &mut [u8]) -> Option<usize> {
+        tcp::tcp_recv(sock_id, buf)
+    }
+
+    pub fn close(sock_id: u16) {
+        tcp::tcp_close(sock_id)
+    }
+}
+
+pub fn network_tick() {
+    unsafe {
+        if !NIC.present {
+            return;
+        }
+        let mut buf = [0u8; 1518];
+        if let Some(len) = NIC.receive_packet(&mut buf) {
+            process_incoming_packet(&buf[..len]);
         }
     }
 }

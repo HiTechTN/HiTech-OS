@@ -15,6 +15,7 @@ impl Shell {
         println!("Tapez 'help' pour les commandes\n");
         
         loop {
+            crate::network::network_tick();
             print!("{}", PROMPT);
             if self.read_and_execute() {
                 break;
@@ -78,6 +79,7 @@ impl Shell {
             b"kill" => self.cmd_kill(command),
             b"ifconfig" => self.cmd_ifconfig(),
             b"ping" => self.cmd_ping(),
+            b"netstat" => self.cmd_netstat(),
             b"lspci" => self.cmd_lspci(),
             b"lsusb" => self.cmd_lsusb(),
             b"test" => self.cmd_test(),
@@ -97,7 +99,7 @@ impl Shell {
         println!("  Systeme: help, clear, info, mem, date, time, uptime, reboot, shutdown, exit");
         println!("  Fichiers: ls, cat, mkdir, touch, rm, df");
         println!("  Processus: ps, kill");
-        println!("  Reseau: ifconfig, ping");
+        println!("  Reseau: ifconfig, ping, netstat");
         println!("  Materiel: lspci, lsusb");
         println!("  Audio: beep, test");
         println!("  Graphique: clearcolor, draw");
@@ -211,13 +213,49 @@ impl Shell {
     }
 
     fn cmd_ifconfig(&self) {
-        println!("eth0: pilote RTL8139");
-        println!("  MAC: 00:00:00:00:00:00");
-        println!("  IP: 192.168.1.100");
+        unsafe {
+            let mac = crate::network::NIC.mac_address;
+            let ip = crate::network::IP_ADDRESS.lock();
+            println!("eth0: pilote RTL8139");
+            println!("  MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            println!("  IP: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        }
     }
 
     fn cmd_ping(&self) {
-        println!("ping: cible non specifiee");
+        println!("ping: utilise 'ping <ip>' (pas encore integre)");
+    }
+
+    fn cmd_netstat(&self) {
+        use crate::network::tcp;
+        let table = tcp::TCP_TABLE.lock();
+        println!("Connexions TCP actives:");
+        println!("  Proto Local           Remote            Etat");
+        for (_, slot) in table.iter().enumerate() {
+            if let Some(ref c) = slot {
+                if c.state == tcp::TCP_STATE_CLOSED { continue; }
+                let state_str = match c.state {
+                    tcp::TCP_STATE_LISTEN => "LISTEN",
+                    tcp::TCP_STATE_SYN_SENT => "SYN_SENT",
+                    tcp::TCP_STATE_SYN_RECEIVED => "SYN_RECV",
+                    tcp::TCP_STATE_ESTABLISHED => "ESTAB",
+                    tcp::TCP_STATE_FIN_WAIT_1 => "FIN_WAIT1",
+                    tcp::TCP_STATE_FIN_WAIT_2 => "FIN_WAIT2",
+                    tcp::TCP_STATE_CLOSE_WAIT => "CLOSE_WAIT",
+                    tcp::TCP_STATE_CLOSING => "CLOSING",
+                    tcp::TCP_STATE_LAST_ACK => "LAST_ACK",
+                    tcp::TCP_STATE_TIME_WAIT => "TIME_WAIT",
+                    _ => "UNKNOWN",
+                };
+                println!("  TCP   {:15}:{:<5} {:15}:{:<5} {}",
+                    format_args!("{}.{}.{}.{}", c.src_ip[0], c.src_ip[1], c.src_ip[2], c.src_ip[3]),
+                    c.src_port,
+                    format_args!("{}.{}.{}.{}", c.dst_ip[0], c.dst_ip[1], c.dst_ip[2], c.dst_ip[3]),
+                    c.dst_port,
+                    state_str);
+            }
+        }
     }
 
     fn cmd_lspci(&self) {
