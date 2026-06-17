@@ -1,0 +1,12 @@
+[build]
+target = "x86_64-vibe_os.json"
+
+[target.'cfg(all(target_arch = "x86_64", target_os = "none"))']
+rustflags = [
+    "-C", "panic=abort",
+]
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+json-target-spec = true

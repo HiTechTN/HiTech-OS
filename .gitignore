@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.o
+*.elf
+*.iso
+*.img
+.vscode
+.idea
+*.swp
+*.swo
+*~
