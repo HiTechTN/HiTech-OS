@@ -292,7 +292,19 @@ pub fn process_incoming_packet(buffer: &[u8]) {
                     let tcp_data = &buffer[14 + ip_header_len..];
                     tcp::handle_tcp_packet(tcp_data, &src_ip, &dst_ip);
                 } else if protocol == ipv4::IP_PROTOCOL_UDP && buffer.len() >= 42 {
-                    // UDP dispatch — packets received but no handler binding yet
+                    let ip_header_len = ((ip_header[0] & 0x0f) * 4) as usize;
+                    let udp_payload = &buffer[14 + ip_header_len + 8..];
+                    if let Some(udp_hdr) = udp::parse(&buffer[14 + ip_header_len..]) {
+                        if udp_hdr.dst_port == crate::dhcp::DHCP_CLIENT_PORT {
+                            if let Some(result) = crate::dhcp::parse_dhcp_reply(udp_payload) {
+                                let mut ip = crate::network::IP_ADDRESS.lock();
+                                *ip = result.yiaddr;
+                                println!("DHCP: IP {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+                                println!("DHCP: Masque {}.{}.{}.{}", result.subnet_mask[0], result.subnet_mask[1], result.subnet_mask[2], result.subnet_mask[3]);
+                                println!("DHCP: Passerelle {}.{}.{}.{}", result.gateway[0], result.gateway[1], result.gateway[2], result.gateway[3]);
+                            }
+                        }
+                    }
                 }
             }
             _ => {}

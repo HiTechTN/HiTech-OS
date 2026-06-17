@@ -1,4 +1,3 @@
-use crate::keyboard::read_key;
 use alloc::vec::Vec;
 
 const PROMPT: &str = "vibeOS> ";
@@ -28,7 +27,8 @@ impl Shell {
         let mut pos = 0;
         
         loop {
-            if let Some(c) = read_key() {
+            crate::network::network_tick();
+            if let Some(c) = crate::keyboard::read_key() {
                 match c {
                     b'\n' => break,
                     8 | 127 => {
@@ -80,6 +80,7 @@ impl Shell {
             b"ifconfig" => self.cmd_ifconfig(),
             b"ping" => self.cmd_ping(),
             b"netstat" => self.cmd_netstat(),
+            b"dhclient" => self.cmd_dhclient(),
             b"lspci" => self.cmd_lspci(),
             b"lsusb" => self.cmd_lsusb(),
             b"test" => self.cmd_test(),
@@ -99,7 +100,7 @@ impl Shell {
         println!("  Systeme: help, clear, info, mem, date, time, uptime, reboot, shutdown, exit");
         println!("  Fichiers: ls, cat, mkdir, touch, rm, df");
         println!("  Processus: ps, kill");
-        println!("  Reseau: ifconfig, ping, netstat");
+        println!("  Reseau: ifconfig, ping, netstat, dhclient");
         println!("  Materiel: lspci, lsusb");
         println!("  Audio: beep, test");
         println!("  Graphique: clearcolor, draw");
@@ -220,6 +221,31 @@ impl Shell {
             println!("  MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
             println!("  IP: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
+        }
+    }
+
+    fn cmd_dhclient(&self) {
+        println!("DHCP: envoi DISCOVER...");
+        if let Some(xid) = crate::dhcp::send_discover() {
+            println!("DHCP: DISCOVER envoye (xid={:08x})", xid);
+            for _ in 0..200 {
+                crate::network::network_tick();
+                let ip = crate::network::IP_ADDRESS.lock();
+                let configured = *ip != [0; 4];
+                drop(ip);
+                if configured {
+                    println!("DHCP: configuration terminee");
+                    return;
+                }
+                for _ in 0..10000 { core::hint::spin_loop(); }
+            }
+            // If we got an offer, send request
+            let ip = crate::network::IP_ADDRESS.lock();
+            if *ip != [0; 4] {
+                println!("DHCP: IP deja configuree");
+            } else {
+                println!("DHCP: aucun serveur trouve");
+            }
         }
     }
 

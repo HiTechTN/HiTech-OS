@@ -51,6 +51,7 @@ pub mod console;
 pub mod rng;
 pub mod resource;
 pub mod ramdisk;
+pub mod dhcp;
 
 pub const VERSION: &str = "0.8.0";
 pub const BUILD_DATE: &str = "2026-06-17";
