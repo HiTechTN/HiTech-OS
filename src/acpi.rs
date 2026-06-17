@@ -201,6 +201,30 @@ pub mod pci {
         read_address(bus, device, function, 0x08)
     }
 
+    pub fn read_bar(bus: u8, device: u8, function: u8, bar_index: u8) -> Option<(u64, bool)> {
+        if bar_index > 5 {
+            return None;
+        }
+        let reg = 0x10 + bar_index * 4;
+        let bar = read_address(bus, device, function, reg);
+        if bar == 0 || bar == 0xffffffff {
+            return None;
+        }
+        if bar & 1 == 1 {
+            Some(((bar & !0x3) as u64, true))
+        } else {
+            let mmio_type = (bar >> 1) & 0x3;
+            let base = (bar & !0xf) as u64;
+            if mmio_type == 0x2 {
+                let bar_hi = read_address(bus, device, function, reg + 4);
+                let addr = base | ((bar_hi as u64) << 32);
+                Some((addr, false))
+            } else {
+                Some((base, false))
+            }
+        }
+    }
+
     pub fn scan_bus() {
         println!("Scan PCI...");
         

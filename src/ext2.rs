@@ -311,10 +311,92 @@ impl Ext2Filesystem {
 }
 
 pub static mut EXT2: Ext2Filesystem = Ext2Filesystem::new();
+pub static EXT2_DATA: spin::Mutex<Option<alloc::vec::Vec<u8>>> = spin::Mutex::new(None);
 
 pub fn init_ext2() -> bool {
     println!("ext2: support compile");
     true
+}
+
+pub fn mount_root() -> bool {
+    use core::sync::atomic::Ordering;
+    if !crate::ramdisk::RAMDISK_PRESENT.load(Ordering::SeqCst) {
+        println!("mount: ramdisk absent");
+        return false;
+    }
+
+    let mut data = alloc::vec![0u8; crate::ramdisk::RAMDISK_SIZE];
+
+    for block in 0..crate::ramdisk::BLOCK_COUNT {
+        let mut buf = [0u8; crate::ramdisk::BLOCK_SIZE];
+        if !crate::ramdisk::read_block(block, &mut buf) {
+            println!("mount: erreur lecture bloc {}", block);
+            return false;
+        }
+        let offset = block * crate::ramdisk::BLOCK_SIZE;
+        data[offset..offset + crate::ramdisk::BLOCK_SIZE].copy_from_slice(&buf);
+    }
+
+    unsafe {
+        if EXT2.read_superblock(&data) {
+            *EXT2_DATA.lock() = Some(data);
+            println!("  ext2 monte depuis ramdisk (racine inode 2)");
+            true
+        } else {
+            println!("  ramdisk: pas de superblock ext2 valide");
+            false
+        }
+    }
+}
+
+fn with_data<F, R>(f: F) -> R
+where
+    F: FnOnce(&[u8], &Ext2Filesystem) -> R,
+{
+    let guard = EXT2_DATA.lock();
+    unsafe {
+        if let Some(ref data) = *guard {
+            f(data.as_slice(), &EXT2)
+        } else {
+            f(&[], &EXT2)
+        }
+    }
+}
+
+pub fn read_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
+    unsafe {
+        if EXT2.superblock.is_none() {
+            return None;
+        }
+    }
+    let guard = EXT2_DATA.lock();
+    let data = guard.as_ref()?;
+    unsafe {
+        let entries = EXT2.read_dir(data, EXT2_ROOT_INO);
+        for (ino, name, ftype) in &entries {
+            if ftype == &EXT2_FT_REG_FILE && name == path {
+                if let Some(inode) = EXT2.read_inode(data, *ino) {
+                    let mut file_data = alloc::vec::Vec::new();
+                    for i in 0..12 {
+                        let block_num = inode.block[i];
+                        if block_num == 0 {
+                            break;
+                        }
+                        if let Some(block_data) = EXT2.read_block(data, block_num) {
+                            let sz = (inode.size() as usize).min(file_data.len() + block_data.len());
+                            let remain = sz.saturating_sub(file_data.len());
+                            file_data.extend_from_slice(&block_data[..remain]);
+                            if file_data.len() >= inode.size() as usize {
+                                break;
+                            }
+                        }
+                    }
+                    return Some(file_data);
+                }
+            }
+        }
+    }
+    None
 }
 
 pub mod shell_commands {
@@ -349,25 +431,59 @@ pub mod shell_commands {
     }
 
     pub fn cmd_ls() {
-        unsafe {
-            if let Some(_sb) = EXT2.superblock {
-                let data = &[];
-                if let Some(_inode) = EXT2.read_inode(data, EXT2_ROOT_INO) {
-                    let entries = EXT2.read_dir(data, EXT2_ROOT_INO);
-                    for (ino, name, ftype) in &entries {
-                        let t = match *ftype {
-                            EXT2_FT_DIR => 'd',
-                            EXT2_FT_REG_FILE => 'f',
-                            EXT2_FT_SYMLINK => 'l',
-                            _ => 'x',
-                        };
-                        print!("{} {:10} {}\n", t, ino, name);
+        with_data(|data, ext2| {
+            if ext2.superblock.is_none() {
+                println!("ext2: pas monte");
+                return;
+            }
+            let entries = ext2.read_dir(data, EXT2_ROOT_INO);
+            for (ino, name, ftype) in &entries {
+                let t = match *ftype {
+                    EXT2_FT_DIR => 'd',
+                    EXT2_FT_REG_FILE => '-',
+                    EXT2_FT_SYMLINK => 'l',
+                    _ => '?',
+                };
+                print!("{} {:6} {}\n", t, ino, name);
+            }
+        });
+    }
+
+    pub fn cmd_cat(filename: &str) {
+        with_data(|data, ext2| {
+            if ext2.superblock.is_none() {
+                println!("ext2: pas monte");
+                return;
+            }
+            let entries = ext2.read_dir(data, EXT2_ROOT_INO);
+            for (ino, name, ftype) in &entries {
+                if ftype == &EXT2_FT_REG_FILE && name == filename {
+                    if let Some(inode) = ext2.read_inode(data, *ino) {
+                        let mut pos: usize = 0;
+                        for i in 0..12 {
+                            let block_num = inode.block[i];
+                            if block_num == 0 {
+                                break;
+                            }
+                            if let Some(block_data) = ext2.read_block(data, block_num) {
+                                let sz = (inode.size() as usize).min(pos + block_data.len());
+                                let end = sz.saturating_sub(pos);
+                                print!("{}", core::str::from_utf8(&block_data[..end]).unwrap_or("???\n"));
+                                pos += end;
+                                if pos >= inode.size() as usize {
+                                    break;
+                                }
+                            }
+                        }
+                        if pos == 0 {
+                            println!("(fichier vide)");
+                        }
+                        return;
                     }
                 }
-            } else {
-                println!("ext2: pas monte");
             }
-        }
+            println!("ext2: fichier introuvable: {}", filename);
+        });
     }
 
     pub fn cmd_stat(path: &str) {

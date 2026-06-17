@@ -211,10 +211,17 @@ pub static mut USB_CONTROLLER: UsbHostController = UsbHostController::new();
 
 pub fn init_usb() -> Result<(), UsbError> {
     println!("Initialisation USB...");
+
+    let mmio_base = crate::pcie::find_device_by_class(0x0c, 0x03)
+        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 0))
+        .map(|(addr, _is_io)| {
+            if addr > 0xffff_ffff { USB1_BASE } else { addr as u32 }
+        })
+        .unwrap_or(USB1_BASE);
     
     unsafe {
-        if let Err(e) = USB_CONTROLLER.init(USB1_BASE as u32) {
-            println!("  OHCI non trouve, essaie UHCI...");
+        if let Err(e) = USB_CONTROLLER.init(mmio_base) {
+            println!("  OHCI non trouve, essaie fallback...");
             return Err(e);
         }
     }

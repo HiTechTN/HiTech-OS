@@ -170,9 +170,24 @@ pub static IP_ADDRESS: spin::Mutex<[u8; 4]> = spin::Mutex::new([0, 0, 0, 0]);
 
 pub fn init_network() -> Result<(), NetworkError> {
     println!("Recherche NIC RTL8139...");
-    
+
+    let io_base = crate::pcie::find_device_by_id(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID)
+        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 0))
+        .map(|(addr, _is_io)| {
+            if addr > 0xffff {
+                println!("  BAR RTL8139 > 64KB, utilise defaut");
+                RTL8139_IO_BASE
+            } else {
+                addr as u16
+            }
+        })
+        .unwrap_or_else(|| {
+            println!("  RTL8139 non trouve sur PCI, utilise bar par defaut");
+            RTL8139_IO_BASE
+        });
+
     unsafe {
-        NIC.init(RTL8139_IO_BASE)?;
+        NIC.init(io_base)?;
     }
     
     println!("  MAC: {}", unsafe { NIC.mac_str() });

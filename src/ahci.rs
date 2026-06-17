@@ -241,9 +241,26 @@ pub static mut AHCI: AhciController = AhciController::new();
 
 pub fn init_ahci() -> Result<(), AhciError> {
     println!("Initialisation SATA/AHCI...");
+
+    let bar = crate::pcie::find_device_by_class(0x01, 0x06)
+        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 5))
+        .or_else(|| crate::pcie::find_device_by_class(0x01, 0x06)
+            .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 0)))
+        .or_else(|| {
+            println!("  AHCI non trouve sur PCI, utilise bar par defaut");
+            Some((AHCI_BAR as u64, false))
+        });
+    
+    let base = match bar {
+        Some((addr, _is_io)) => addr as u32,
+        None => {
+            println!("  AHCI indisponible");
+            return Err(AhciError::NotFound);
+        }
+    };
     
     unsafe {
-        AHCI.init(AHCI_BAR)?;
+        AHCI.init(base)?;
     }
     
     println!("  {} ports trouves", unsafe { AHCI.port_count });

@@ -122,8 +122,22 @@ pub static mut AC97: Ac97Controller = Ac97Controller::new();
 
 pub fn init_ac97() -> bool {
     println!("AC97: recherche...");
+
+    let nam_bar = crate::pcie::find_device_by_class(0x04, 0x01)
+        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 0))
+        .map(|(addr, _is_io)| {
+            if addr > 0xffff { AC97_NAMBAR } else { addr as u16 }
+        })
+        .unwrap_or(AC97_NAMBAR);
+    let nabm_bar = crate::pcie::find_device_by_class(0x04, 0x01)
+        .and_then(|(b, d, f)| crate::acpi::pci::read_bar(b, d, f, 1))
+        .map(|(addr, _is_io)| {
+            if addr > 0xffff { AC97_NABM_BASE } else { addr as u16 }
+        })
+        .unwrap_or(AC97_NABM_BASE);
+
     unsafe {
-        if AC97.init(AC97_NAMBAR, AC97_NABM_BASE) {
+        if AC97.init(nam_bar, nabm_bar) {
             println!("  AC97 codec detecte");
             println!("  Sample rate: {} Hz", AC97.sample_rate);
             println!("  Canaux: {}", AC97.channels);

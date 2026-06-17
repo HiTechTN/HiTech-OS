@@ -153,6 +153,49 @@ pub fn scan_bus() {
     }
 }
 
+pub fn find_device_by_id(vendor_id: u16, device_id: u16) -> Option<(u8, u8, u8)> {
+    for bus in 0..=255u16 {
+        for dev in 0..32 {
+            for func in 0..8 {
+                let vid = crate::acpi::pci::get_vendor_id(bus as u8, dev, func);
+                if vid == 0xffff {
+                    if func == 0 { break; }
+                    continue;
+                }
+                if vid == vendor_id {
+                    let did = crate::acpi::pci::read_address(bus as u8, dev, func, 0x02);
+                    let did = (did >> 16) as u16;
+                    if did == device_id {
+                        return Some((bus as u8, dev, func));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn find_device_by_class(class_code: u32, subclass: u32) -> Option<(u8, u8, u8)> {
+    for bus in 0..=255u16 {
+        for dev in 0..32 {
+            for func in 0..8 {
+                let vid = crate::acpi::pci::get_vendor_id(bus as u8, dev, func);
+                if vid == 0xffff {
+                    if func == 0 { break; }
+                    continue;
+                }
+                let cc = crate::acpi::pci::get_class_code(bus as u8, dev, func);
+                let cc_class = (cc >> 24) & 0xff;
+                let cc_sub = (cc >> 16) & 0xff;
+                if cc_class == class_code as u32 && cc_sub == subclass as u32 {
+                    return Some((bus as u8, dev, func));
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn init_pcie() {
     unsafe {
         PCIE.scan();

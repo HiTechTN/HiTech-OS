@@ -174,17 +174,21 @@ pub mod shell_commands {
     use super::*;
 
     pub fn cmd_ls() {
+        unsafe {
+            if crate::ext2::EXT2.mounted {
+                crate::ext2::shell_commands::cmd_ls();
+                return;
+            }
+        }
         let vfs = VFS.lock();
-        
         if let Some(inode) = vfs.get_inode(vfs.root_inode) {
             println!("Total: {} octets", inode.size);
         }
-        
-        println!("drwxr-xr-x  2 root root  4096 .");
-        println!("drwxr-xr-x  2 root  4096 ..");
-        println!("-rw-r--r--  1 root root     0 dev/");
-        println!("-rw-r--r--  1 root root     0 etc/");
-        println!("-rw-r--r--  1 root root     0 proc/");
+        print!("drwxr-xr-x  2 root root  4096 .\n");
+        print!("drwxr-xr-x  2 root       4096 ..\n");
+        print!("-rw-r--r--  1 root root     0 dev/\n");
+        print!("-rw-r--r--  1 root root     0 etc/\n");
+        print!("-rw-r--r--  1 root root     0 proc/\n");
     }
 
     pub fn cmd_cat(args: &[&str]) {
@@ -192,14 +196,13 @@ pub mod shell_commands {
             println!("Usage: cat <fichier>");
             return;
         }
-        
-        let filename = args[0];
-        
-        if filename.starts_with('/') {
-            println!("chemin absolu non supporte");
-        } else {
-            println!("Fichier non trouve: {}", filename);
+        unsafe {
+            if crate::ext2::EXT2.mounted {
+                crate::ext2::shell_commands::cmd_cat(args[0]);
+                return;
+            }
         }
+        println!("Fichier non trouve: {}", args[0]);
     }
 
     pub fn cmd_mkdir(args: &[&str]) {
@@ -207,9 +210,7 @@ pub mod shell_commands {
             println!("Usage: mkdir <repertoire>");
             return;
         }
-        
         let mut vfs = VFS.lock();
-        
         match vfs.create(args[0], FileType::Directory) {
             Some(_) => println!("Repertoire cree: {}", args[0]),
             None => println!("Erreur: creation impossible"),
@@ -221,9 +222,7 @@ pub mod shell_commands {
             println!("Usage: touch <fichier>");
             return;
         }
-        
         let mut vfs = VFS.lock();
-        
         match vfs.create(args[0], FileType::Regular) {
             Some(_) => println!("Fichier cree: {}", args[0]),
             None => println!("Erreur: creation impossible"),
@@ -240,6 +239,18 @@ pub mod shell_commands {
 
     pub fn cmd_df() {
         println!("Syst. de fichiers    1K-blocks   Used Available Use% Montedans");
+        unsafe {
+            if crate::ext2::EXT2.mounted {
+                if let Some(sb) = crate::ext2::EXT2.superblock {
+                    let total = sb.blocks_count / 2;
+                    let used = total - sb.free_blocks_count / 2;
+                    let avail = total - used;
+                    println!("/dev/ramdisk0        {:8} {:8} {:8} {:3}% /",
+                        total, used, avail, if total > 0 { used * 100 / total } else { 0 });
+                    return;
+                }
+            }
+        }
         println!("/dev/sda1              10240      512      9728   5% /");
     }
 }

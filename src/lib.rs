@@ -81,6 +81,7 @@ pub fn init() {
     syscall::init_syscalls();
     uuid::init_uuid();
     ext2::init_ext2();
+    ext2::mount_root();
     tmpfs::init_tmpfs();
     devpts::init_devpts();
     efivar::init_efivar();
