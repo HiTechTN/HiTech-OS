@@ -27,6 +27,9 @@
         # configuration NixOS de base (Phase 1) écrite dans ./os/
       }
     ) // {
-      # nixosConfigurations.patient-zero = ... (Phase 1)
+      nixosConfigurations.patient-zero = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [ ./os/configuration.nix ];
+      };
     };
 }
