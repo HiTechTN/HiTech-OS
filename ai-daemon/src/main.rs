@@ -6,8 +6,6 @@
 
 mod backend;
 
-use backend::InferenceBackend;
-
 #[tokio::main]
 async fn main() {
     println!("hitechos-ai-daemon — démarrage (squelette Phase 4)");
