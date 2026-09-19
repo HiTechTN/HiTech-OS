@@ -53,6 +53,7 @@
     extraGroups = [ "wheel" ];
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHiZ0ohzgPMrdYSwKK1wU2U8VYzwDs/XpIuzDDtkO8O+ azmi.hitech@gmail.com"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG1Kb2DNzB8mL5j3PgrHwWcPUAd8bTONw/mO9Iqz1nyA nixos@GLF-OS"
     ];
   };
   services.openssh.enable = true;
