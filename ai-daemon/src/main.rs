@@ -1,19 +1,48 @@
 //! HiTech-OS AI Daemon — entry point.
 //!
-//! Phase 4 (roadmap) : intégration réelle du backend GGUF/llama.cpp
-//! avec chargement mmap zero-copy, + backend CUDA optionnel derrière
-//! le trait `InferenceBackend` pour les déploiements serveur hybride.
+//! Phase 4 : integration reelle du backend GGUF/llama.cpp avec chargement
+//! mmap zero-copy (comportement par defaut de llama.cpp), + backend CUDA
+//! optionnel derriere le trait `InferenceBackend` pour les deploiements
+//! serveur hybride (feature `cuda`).
+//!
+//! Le chemin du modele GGUF est lu depuis la variable d'environnement
+//! `HITECHOS_MODEL_PATH`. Si elle est absente, le demon demarre quand
+//! meme (utile pour valider le reste de l'OS sans avoir de modele sous
+//! la main) mais ne charge rien.
 
 mod backend;
 
-#[tokio::main]
-async fn main() {
-    println!("hitechos-ai-daemon — démarrage (squelette Phase 4)");
+use std::env;
+use std::path::PathBuf;
 
-    let backend = backend::select_backend();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    println!("hitechos-ai-daemon — démarrage");
+
+    let mut backend = backend::select_backend()?;
     println!("Backend d'inférence sélectionné : {}", backend.name());
 
-    // TODO Phase 4 :
-    // - charger un modèle GGUF quantifié (4-bit/2-bit) via mmap
-    // - exposer une interface (socket local / MQTT) pour AgentOS
+    match env::var("HITECHOS_MODEL_PATH") {
+        Ok(path) => {
+            let path = PathBuf::from(path);
+            println!("Chargement du modèle GGUF : {path:?}");
+            backend.load_model(&path)?;
+
+            let prompt = "Bonjour, je suis";
+            let output = backend.generate(prompt, Some(64))?;
+            println!("Prompt : {prompt}");
+            println!("Sortie : {output}");
+        }
+        Err(_) => {
+            println!(
+                "HITECHOS_MODEL_PATH non définie — démon prêt, aucun modèle chargé \
+                 (fixe cette variable vers un fichier .gguf pour tester l'inférence)."
+            );
+        }
+    }
+
+    // TODO Phase 5 (AgentOS) :
+    // - exposer une interface (socket local / MQTT) pour que l'agent
+    //   consomme ce backend au lieu d'un appel direct en ligne de commande
+    Ok(())
 }

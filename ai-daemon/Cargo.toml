@@ -6,8 +6,11 @@ description = "AI daemon for HiTech-OS — GGUF inference with pluggable backend
 license = "AGPL-3.0-or-later"
 
 [dependencies]
-# Backend GGUF/llama.cpp — à intégrer en Phase 4
-# llama-cpp-2 = "0.1"
+# Backend GGUF/llama.cpp (Phase 4) — bindings sûrs vers llama.cpp.
+# Chargement mmap zero-copy par défaut (LlamaModelParams::default().use_mmap == true).
+llama-cpp-2 = "0.1"
+encoding_rs = "0.8"    # llama-cpp-2 exige ^0.8.35 (édition 2024) — nécessite un Rust récent, voir note en tête de backend.rs
+anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,4 +18,4 @@ serde_json = "1"
 [features]
 default = ["cpu"]
 cpu = []
-cuda = []   # active le backend FFI C++/CUDA pour les configurations serveur hybride B2B
+cuda = ["llama-cpp-2/cuda"]   # active le backend GPU llama.cpp pour les configurations serveur hybride B2B
