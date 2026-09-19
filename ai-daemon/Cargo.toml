@@ -1,0 +1,18 @@
+[package]
+name = "hitechos-ai-daemon"
+version = "0.1.0"
+edition = "2021"
+description = "AI daemon for HiTech-OS — GGUF inference with pluggable backends (CPU/edge + optional CUDA via FFI)"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+# Backend GGUF/llama.cpp — à intégrer en Phase 4
+# llama-cpp-2 = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["cpu"]
+cpu = []
+cuda = []   # active le backend FFI C++/CUDA pour les configurations serveur hybride B2B

@@ -1,0 +1,13 @@
+# Rust
+/ai-daemon/target/
+
+# Nix
+result
+result-*
+
+# PlatformIO
+firmware/patient-zero/.pio/
+
+# Misc
+.DS_Store
+*.log
