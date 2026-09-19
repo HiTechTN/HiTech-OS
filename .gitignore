@@ -11,3 +11,4 @@ firmware/patient-zero/.pio/
 # Misc
 .DS_Store
 *.log
+firmware/patient-zero/src/secrets.h

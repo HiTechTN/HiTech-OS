@@ -34,3 +34,18 @@ jobs:
         run: nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel -L
       - name: Taille de la closure (indicateur d'empreinte)
         run: du -sh result
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - run: pip install platformio
+      - name: Secrets de build (placeholders — jamais les vrais identifiants)
+        working-directory: firmware/patient-zero/src
+        run: cp secrets.h.example secrets.h
+      - name: Build firmware ESP32
+        working-directory: firmware/patient-zero
+        run: pio run

@@ -103,6 +103,26 @@ C'est cohérent avec la philosophie "sovereign / local-first" : le nœud doit re
 
 ---
 
-## 3. Notes
+## 3. État d'avancement (mis à jour au fil des sessions)
+
+| Phase | Statut | Détail |
+|---|---|---|
+| 0 — Fondations | ✅ Fait | Structure repo, `flake.nix`, CI de base |
+| 1 — OS Core | ✅ Fait, testé | `configuration.nix` bootable, testé sur `nix build .#...build.vm` réel, SSH fonctionnel |
+| 2 — Télémétrie | ⚙️ Config écrite, non testée en réel | Mosquitto (auth par utilisateur) + Telegraf + InfluxDB déclarés comme services NixOS ; secrets (mot de passe MQTT, token InfluxDB) à déposer manuellement sur le nœud, pas encore de gestion de secrets chiffrés |
+| 3 — Patient Zero (firmware) | ⚙️ Code écrit, jamais flashé sur un ESP32 réel | Lecture DHT22/OLED/MQTT/UART BMS implémentée avec vraies libs, backoff de reconnexion, buffer RTC RAM ; CI compile le firmware (avec des secrets placeholder) mais rien n'a tourné sur du hardware physique |
+| 4 — Démon IA | 🔲 Squelette seulement | Trait `InferenceBackend` posé, mais pas d'intégration GGUF/llama.cpp réelle — nécessite de choisir/tester un binding Rust et d'avoir un modèle quantifié sous la main |
+| 5 — AgentOS | 🔲 Non commencé | Dépend de 2, 3 et 4 étant réellement opérationnels (il faut de la vraie donnée à consommer) |
+| 6 — OTA & immutabilité | ⚙️ Config écrite, non testée | `system.autoUpgrade` déclaré (pull depuis le flake GitHub), rollback = mécanisme natif NixOS (générations de boot) ; jamais testé en conditions réelles (ni un vrai cycle update→rollback) |
+| 7 — Durcissement | ⚙️ Bases posées | SSH root désactivé, sudo avec mot de passe, firewall explicite, auditd activé ; **pas d'audit de sécurité réel effectué** |
+| 8 — Packaging B2C | 🔲 Non commencé | |
+| 9 — Packaging B2B | 🔲 Non commencé | |
+| 10 — Beta publique | 🔲 Non commencé | |
+
+**Ce qui bloque une vraie progression sur 4/5/8/9/10** : ce sont des étapes qui demandent soit du matériel physique (ESP32, BMS, station de batterie), soit un modèle IA + GPU/edge device pour tester l'inférence, soit des décisions produit (tarification, UX de provisioning) qui ne se codent pas à l'aveugle. La CI valide que le code *compile*, pas qu'il *fonctionne* sur le terrain.
+
+---
+
+## 4. Notes
 - L'ancien roadmap Vibe-OS (kernel bare-metal x86_64 en Rust pur, GDT/IDT/VGA/PS2) est **abandonné** — ce travail ne sert plus de base technique pour HiTech-OS.
 - Les phases ci-dessus ne sont pas datées : à affiner une fois que Phase 0 et 1 auront donné une idée de vitesse réelle.

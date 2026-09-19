@@ -38,14 +38,41 @@
   # --- Conteneurisation native ---
   boot.enableContainers = true;
 
-  # --- Services du noeud (Phase 2/3) ---
+  # --- Télémétrie (Phase 2) ---
   services.mosquitto = {
     enable = true;
     listeners = [{
       port = 1883;
-      users = { }; # authentification a definir en Phase 2
+      users."hitechos-agent" = {
+        acl = [ "readwrite hitechos/#" ];
+        # Mot de passe défini hors-dépôt via `mosquitto_passwd`, injecté au
+        # déploiement (jamais en clair dans ce fichier versionné) :
+        #   mosquitto_passwd -c /var/lib/mosquitto/passwd hitechos-agent
+        hashedPasswordFile = "/run/secrets/mosquitto-hitechos-agent"; # géré hors dépôt (agenix/sops-nix à brancher en Phase 6)
+      };
     }];
   };
+
+  services.telegraf = {
+    enable = true;
+    environmentFiles = [ "/run/secrets/telegraf-influx-token" ]; # fournit $INFLUX_TOKEN
+    extraConfig = {
+      inputs.mqtt_consumer = [{
+        servers = [ "tcp://127.0.0.1:1883" ];
+        topics = [ "hitechos/+/+/+" ];
+        data_format = "json";
+        name_override = "hitechos_telemetry";
+      }];
+      outputs.influxdb_v2 = [{
+        urls = [ "http://127.0.0.1:8086" ];
+        token = "$INFLUX_TOKEN";
+        organization = "HiTechTN";
+        bucket = "hitechos";
+      }];
+    };
+  };
+
+  services.influxdb2.enable = lib.mkDefault true;
 
   # --- Utilisateur minimal pour l'administration ---
   users.users.hitechos = {
@@ -62,6 +89,27 @@
   # --- Empreinte minimale ---
   services.udisks2.enable = false;
   security.polkit.enable = lib.mkDefault false;
+
+  # --- OTA (Phase 6) ---
+  # Rollback natif : chaque switch crée une nouvelle génération de boot ;
+  # `nixos-rebuild switch --rollback` (ou le sélecteur GRUB au boot) revient
+  # instantanément à la précédente si la nouvelle casse quelque chose.
+  system.autoUpgrade = {
+    enable = true;
+    flake = "github:HiTechTN/vibe-os#patient-zero";
+    dates = "04:00"; # fenêtre de maintenance nocturne, à ajuster par site
+    allowReboot = false; # un reboot auto sur un noeud de prod est un choix a valider, pas un defaut
+  };
+  # Garde-fou : on ne garde que les N dernieres generations pour ne pas
+  # saturer le disque avec l'historique OTA.
+  boot.loader.grub.configurationLimit = 10;
+
+  # --- Durcissement (Phase 7) ---
+  security.sudo.wheelNeedsPassword = true;
+  services.openssh.settings.PermitRootLogin = "no";
+  services.openssh.settings.KbdInteractiveAuthentication = false;
+  networking.firewall.enable = true; # explicite : tout est ferme sauf allowedTCPPorts ci-dessus
+  security.auditd.enable = true; # journalisation des actions systeme (utile pour la piste d'audit AgentOS)
 
   system.stateVersion = "24.05";
 }
