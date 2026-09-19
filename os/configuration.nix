@@ -52,7 +52,7 @@
     isNormalUser = true;
     extraGroups = [ "wheel" ];
     openssh.authorizedKeys.keys = [
-      # TODO : ajouter la cle publique SSH de deploiement
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHiZ0ohzgPMrdYSwKK1wU2U8VYzwDs/XpIuzDDtkO8O+ azmi.hitech@gmail.com"
     ];
   };
   services.openssh.enable = true;
