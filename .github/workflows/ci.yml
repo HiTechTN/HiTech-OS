@@ -49,3 +49,19 @@ jobs:
       - name: Build firmware ESP32
         working-directory: firmware/patient-zero
         run: pio run
+
+  iso-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+      - name: Build de l'ISO live HiTech-OS
+        run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L
+      - name: Taille de l'ISO générée
+        run: du -sh result/iso/*
+      - name: Publier l'ISO comme artefact téléchargeable
+        uses: actions/upload-artifact@v4
+        with:
+          name: hitechos-live-iso
+          path: result/iso/*.iso
+          retention-days: 14

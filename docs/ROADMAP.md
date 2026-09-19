@@ -108,7 +108,7 @@ C'est cohérent avec la philosophie "sovereign / local-first" : le nœud doit re
 | Phase | Statut | Détail |
 |---|---|---|
 | 0 — Fondations | ✅ Fait | Structure repo, `flake.nix`, CI de base |
-| 1 — OS Core | ✅ Fait, testé | `configuration.nix` bootable, testé sur `nix build .#...build.vm` réel, SSH fonctionnel |
+| 1 — OS Core | ✅ Fait, testé | `configuration.nix` bootable, testé sur `nix build .#...build.vm` réel, SSH fonctionnel ; ISO live (`os/iso.nix`) générée à chaque push par la CI (`iso-build`), jamais testée sur matériel physique réel |
 | 2 — Télémétrie | ⚙️ Config écrite, non testée en réel | Mosquitto (auth par utilisateur) + Telegraf + InfluxDB déclarés comme services NixOS ; secrets (mot de passe MQTT, token InfluxDB) à déposer manuellement sur le nœud, pas encore de gestion de secrets chiffrés |
 | 3 — Patient Zero (firmware) | ⚙️ Code écrit, jamais flashé sur un ESP32 réel | Lecture DHT22/OLED/MQTT/UART BMS implémentée avec vraies libs, backoff de reconnexion, buffer RTC RAM ; CI compile le firmware (avec des secrets placeholder) mais rien n'a tourné sur du hardware physique |
 | 4 — Démon IA | 🔲 Squelette seulement | Trait `InferenceBackend` posé, mais pas d'intégration GGUF/llama.cpp réelle — nécessite de choisir/tester un binding Rust et d'avoir un modèle quantifié sous la main |

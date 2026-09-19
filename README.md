@@ -13,7 +13,7 @@ une sécurité de niveau industriel.
 
 | Dossier | Rôle |
 |---|---|
-| `os/` | Configuration NixOS (immutable core, OTA, conteneurisation) |
+| `os/` | Configuration NixOS : `common.nix` (socle partagé), `configuration.nix` (nœud disque/VM), `iso.nix` (Live CD bootable, générée par la CI à chaque push) |
 | `ai-daemon/` | Démon d'inférence IA en Rust (backend GGUF/llama.cpp, CUDA optionnel) |
 | `firmware/patient-zero/` | Firmware ESP32 du nœud hardware MVP |
 | `telemetry/` | Configuration Mosquitto (MQTT) + Telegraf → InfluxDB |
