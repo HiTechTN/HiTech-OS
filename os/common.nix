@@ -76,7 +76,7 @@
   services.openssh.settings.PasswordAuthentication = false;
 
   # --- Empreinte minimale ---
-  services.udisks2.enable = false;
+  services.udisks2.enable = lib.mkDefault false;
   security.polkit.enable = lib.mkDefault false;
 
   # --- Durcissement (Phase 7) ---
