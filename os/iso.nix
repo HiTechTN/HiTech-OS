@@ -23,12 +23,23 @@
 { config, lib, pkgs, ... }:
 
 let
+  hitechosStatusScript = pkgs.writeShellScriptBin "hitechos-status-launcher" ''
+    systemctl status mosquitto telegraf influxdb2
+    echo
+    echo "Appuie sur Entrée pour fermer"
+    read
+  '';
+
+  hitechosDocsScript = pkgs.writeShellScriptBin "hitechos-docs-launcher" ''
+    less /etc/hitechos/ROADMAP.md
+  '';
+
   hitechosStatusItem = pkgs.makeDesktopItem {
     name = "hitechos-status";
     desktopName = "HiTech-OS — État des services";
     comment = "Affiche l'état de Mosquitto, Telegraf et InfluxDB";
     icon = "utilities-system-monitor";
-    exec = "gnome-terminal -- bash -c 'systemctl status mosquitto telegraf influxdb2; echo; echo Appuie sur Entrée pour fermer; read'";
+    exec = "gnome-terminal -- ${hitechosStatusScript}/bin/hitechos-status-launcher";
     terminal = false;
     categories = [ "System" ];
   };
@@ -38,9 +49,9 @@ let
     desktopName = "HiTech-OS — Documentation (roadmap)";
     comment = "Roadmap et décisions d'architecture HiTech-OS, en lecture hors-ligne";
     icon = "help-contents";
-    exec = "gnome-terminal -- bash -c 'less /etc/hitechos/ROADMAP.md'";
+    exec = "gnome-terminal -- ${hitechosDocsScript}/bin/hitechos-docs-launcher";
     terminal = false;
-    categories = [ "Documentation" ];
+    categories = [ "Utility" ];
   };
 in
 {
