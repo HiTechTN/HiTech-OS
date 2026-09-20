@@ -8,8 +8,11 @@
 # ATTENTION (à bien comprendre avant de flasher) :
 # - Contrairement à une install NixOS+Calamares générique, celle-ci
 #   DÉPLOIE AUSSI les services HiTech-OS sur le disque installé (voir
-#   calamares-hitechos.nix) — mais ce mécanisme n'a jamais été testé en
-#   conditions réelles (Calamares ne tourne jamais pendant `nix build`).
+#   calamares-hitechos.nix). Statut : un premier test réel sur matériel
+#   physique (20/09/2026) a échoué AVANT d'atteindre cette étape (le job
+#   Calamares standard "nixos" plantait sur une histoire de flakes
+#   désactivés — corrigé dans common.nix) ; le mécanisme d'installation
+#   HiTech-OS lui-même reste donc à valider au prochain test réel.
 #   Teste d'abord dans une VM avant un disque réel si possible.
 # - Cette image est volontairement graphique/lourde (GNOME, Firefox,
 #   Calamares) : elle sert à tester/installer sur du matériel, ce n'est
@@ -74,8 +77,9 @@ in
   # et volontairement faible : cette image est éphémère (live), ce
   # réglage ne doit JAMAIS être repris sur le nœud déployé
   # (configuration.nix n'importe pas ce fichier). ---
+  users.users.nixos.initialHashedPassword = lib.mkForce null; # évite l'ambiguïté de précédence avec initialPassword ci-dessous
   users.users.nixos.initialPassword = "hitechos"; # compte live par défaut (autologin GNOME de toute façon)
   users.users.hitechos.initialPassword = "hitechos"; # notre compte, pour un accès TTY sans SSH
 
-  isoImage.isoName = lib.mkForce "hitechos-live-${config.system.nixos.label}-${pkgs.stdenv.hostPlatform.system}.iso";
+  image.fileName = lib.mkForce "hitechos-live-${config.system.nixos.label}-${pkgs.stdenv.hostPlatform.system}.iso"; # isoImage.isoName a été renommé en amont
 }

@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
-      - run: nix flake check
+      - run: nix flake check --extra-experimental-features "nix-command flakes"
 
   os-build:
     runs-on: ubuntu-latest
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
       - name: Build nixosConfigurations.patient-zero (variante QEMU)
-        run: nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel -L
+        run: nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel -L --extra-experimental-features "nix-command flakes"
       - name: Taille de la closure (indicateur d'empreinte)
         run: du -sh result
 
@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
       - name: Build de l'ISO live HiTech-OS
-        run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L
+        run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L --extra-experimental-features "nix-command flakes"
       - name: Taille de l'ISO générée
         run: du -sh result/iso/*
       - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)

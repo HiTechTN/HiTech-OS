@@ -7,6 +7,13 @@
 { config, lib, pkgs, ... }:
 
 {
+  # nix-command + flakes activés partout (nœud ET ISO live) :
+  # - requis par nixos-install lui-même sur ce système (NixOS 26.11) —
+  #   erreur réelle rencontrée sur matériel le 20/09/2026 sans ce réglage :
+  #   "experimental Nix feature 'flakes' is disabled"
+  # - requis aussi par notre OTA (system.autoUpgrade.flake, Phase 6)
+  nix.settings.experimental-features = [ "nix-command" "flakes" ];
+
   boot.kernelPackages = pkgs.linuxPackages_latest;
 
   # Modules noyau désactivés : pas d'audio, pas de GPU desktop, pas de BT
