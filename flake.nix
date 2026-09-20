@@ -32,15 +32,16 @@
         modules = [ ./os/configuration.nix ];
       };
 
-      # ISO live bootable sur matériel réel, générée à chaque push par la CI
-      # (voir .github/workflows/ci.yml, job iso-build) :
+      # ISO live/installeur graphique (GNOME + Calamares + Firefox +
+      # Flatpak), générée à chaque push par la CI (voir
+      # .github/workflows/ci.yml, job iso-build) :
       #   nix build .#nixosConfigurations.iso.config.system.build.isoImage
       nixosConfigurations.iso = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [
           # Module officiel NixOS — résolu via l'input nixpkgs du flake
           # (déterministe), plutôt que <nixpkgs/...> qui dépend de NIX_PATH.
-          "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
+          "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-graphical-calamares-gnome.nix"
           ./os/iso.nix
         ];
       };

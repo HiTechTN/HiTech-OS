@@ -13,8 +13,9 @@
   boot.blacklistedKernelModules = [ "snd" "bluetooth" "btusb" ];
   boot.kernelParams = [ "quiet" ];
 
-  # --- Pas d'interface graphique ---
-  services.xserver.enable = false;
+  # --- Pas d'interface graphique (par défaut ; l'ISO graphique/installeur
+  # écrase ce réglage — voir os/iso.nix) ---
+  services.xserver.enable = lib.mkDefault false;
   documentation.enable = false;
   documentation.nixos.enable = false;
 
