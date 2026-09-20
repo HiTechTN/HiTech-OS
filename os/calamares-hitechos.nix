@@ -298,7 +298,7 @@ let
   # transcrit de calamares.nix, avec notre paquet patché à la place du
   # stock (pkgs.calamares-nixos).
   calamaresAutostart = pkgs.makeAutostartItem {
-    name = "calamares";
+    name = "io.calamares.calamares";
     package = calamaresNixosHitechos;
   };
 in
@@ -320,7 +320,7 @@ in
   services.desktopManager.gnome = {
     favoriteAppsOverride = ''
       [org.gnome.shell]
-      favorite-apps=[ 'firefox.desktop', 'nixos-manual.desktop', 'org.gnome.Console.desktop', 'org.gnome.Nautilus.desktop', 'gparted.desktop', 'calamares.desktop', 'org.gnome.Software.desktop' ]
+      favorite-apps=[ 'firefox.desktop', 'nixos-manual.desktop', 'org.gnome.Console.desktop', 'org.gnome.Nautilus.desktop', 'gparted.desktop', 'io.calamares.calamares.desktop', 'org.gnome.Software.desktop' ]
     '';
     extraGSettingsOverrides = ''
       [org.gnome.shell]
