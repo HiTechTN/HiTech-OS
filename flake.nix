@@ -32,8 +32,8 @@
         modules = [ ./os/configuration.nix ];
       };
 
-      # ISO live/installeur graphique (GNOME + Calamares + Firefox +
-      # Flatpak), générée à chaque push par la CI (voir
+      # ISO live/installeur graphique (GNOME + notre Calamares patché +
+      # Firefox + Flatpak), générée à chaque push par la CI (voir
       # .github/workflows/ci.yml, job iso-build) :
       #   nix build .#nixosConfigurations.iso.config.system.build.isoImage
       nixosConfigurations.iso = nixpkgs.lib.nixosSystem {
@@ -41,7 +41,12 @@
         modules = [
           # Module officiel NixOS — résolu via l'input nixpkgs du flake
           # (déterministe), plutôt que <nixpkgs/...> qui dépend de NIX_PATH.
-          "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-graphical-calamares-gnome.nix"
+          # Seul le module de BASE est importé ici (pas la chaîne
+          # calamares/gnome stock) : le GNOME + Calamares (patché avec notre
+          # étape d'installation HiTech-OS) vit dans os/calamares-hitechos.nix,
+          # pour éviter d'installer le paquet Calamares stock EN PLUS du
+          # nôtre (collision de fichiers sinon).
+          "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-graphical-base.nix"
           ./os/iso.nix
         ];
       };

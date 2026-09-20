@@ -61,18 +61,24 @@ jobs:
         run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L
       - name: Taille de l'ISO générée
         run: du -sh result/iso/*
-      - name: Publier l'ISO comme artefact du run (temporaire, 14 jours)
+      - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
         uses: actions/upload-artifact@v4
         with:
           name: hitechos-live-iso
           path: result/iso/*.iso
-          retention-days: 14
-      - name: Publier/mettre à jour la Release "live-iso" (permanente, écrasée à chaque push sur main)
+          retention-days: 90   # max habituellement autorisé pour un repo public
+      - name: Publier/mettre à jour la Release "live-iso" (si < 2 Go — limite dure de GitHub)
         if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ISO_PATH=$(ls result/iso/*.iso)
+          ISO_SIZE=$(stat -c%s "$ISO_PATH")
+          LIMIT=$((2 * 1000 * 1000 * 1000))  # 2 Go, limite fixe imposée par GitHub Releases
+          if [ "$ISO_SIZE" -ge "$LIMIT" ]; then
+            echo "::warning::ISO de $((ISO_SIZE / 1000 / 1000)) Mo — dépasse la limite de 2 Go des Releases GitHub. Récupère-la via l'onglet Artifacts de ce run à la place."
+            exit 0
+          fi
           gh release delete live-iso --yes --cleanup-tag || true
           gh release create live-iso "$ISO_PATH" \
             --title "HiTech-OS — ISO live (dernier build de main)" \
