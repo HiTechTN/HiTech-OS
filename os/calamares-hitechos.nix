@@ -55,11 +55,23 @@ let
     ---
     # Commandes exécutées CHROOTÉES dans le système fraîchement installé
     # (dontChroot: false => ROOT == /, voir doc shellprocess de Calamares).
+    #
+    # HISTORIQUE : la première version utilisait `nix-shell -p git --run
+    # '...'`, qui échouait en réel (21/09/2026, voir screencast) avec
+    # "experimental Nix feature 'flakes' is disabled" — le chroot hérite
+    # du nix.conf du système LIVE (où flakes n'est pas actif), pas de
+    # celui de common.nix (qui ne s'applique qu'après le premier boot du
+    # système installé). Conséquence grave observée : l'échec de cette
+    # commande faisait sauter TOUS les jobs suivants (mots de passe
+    # utilisateur/root, démontage propre des filesystems).
+    # Fix : git est maintenant préinstallé sur l'ISO (iso.nix), donc plus
+    # besoin de nix-shell ici ; et nixos-rebuild reçoit explicitement le
+    # flag flakes au cas où (défense en profondeur).
     dontChroot: false
     script:
-      - "nix-shell -p git --run 'git clone --depth 1 https://github.com/HiTechTN/HiTech-OS.git /etc/nixos/hitech-os'"
+      - "/run/current-system/sw/bin/git clone --depth 1 https://github.com/HiTechTN/HiTech-OS.git /etc/nixos/hitech-os"
       - "sed -i '/hardware-configuration.nix/a\\      /etc/nixos/hitech-os/os/common.nix' /etc/nixos/configuration.nix"
-      - "/run/current-system/sw/bin/nixos-rebuild boot"
+      - "/run/current-system/sw/bin/nixos-rebuild boot --option extra-experimental-features 'nix-command flakes'"
   '';
 
   hitechosSettingsConf = pkgs.writeText "settings.conf" ''
