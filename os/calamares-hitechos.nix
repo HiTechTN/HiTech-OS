@@ -3,50 +3,24 @@
 # l'installation sur disque inclue AUSSI nos services (common.nix), pas
 # juste un NixOS générique.
 #
-# HISTORIQUE / POURQUOI CETTE VERSION (v2) :
-# La première version patchait settings.conf avec `sed` (a\ + \n) dans le
-# postInstall du dérivé. Testé en réel le 20/09/2026 sur du matériel
-# physique (voir la conversation) : le sed n'a PRIS AUCUN EFFET dans le
-# bac à sable de build Nix (aucune erreur, mais notre job "shellprocess@
-# hitechos" n'apparaissait tout simplement pas dans la séquence exécutée
-# par Calamares — silencieusement ignoré). Cause probable : GNU sed
-# interprète \n dans le texte d'une commande `a\` différemment selon le
-# contexte d'exécution, fragile à travers les sandboxes de build.
+# HISTORIQUE / POURQUOI CETTE VERSION (v3) :
+# v1 : patch de settings.conf au sed dans postInstall — silencieusement
+#      inefficace en sandbox Nix (voir plus bas).
+# v2 : settings.conf complet écrit en Nix — mais le marqueur @out@
+#      (utilisé par le build upstream pour pointer vers le store) était
+#      copié tel quel, donc Calamares ne trouvait aucun module et
+#      refusait de démarrer ("FATAL: no sequence set").
+# v3 : le settings.conf complet est toujours écrit en Nix, mais le
+#      marqueur @out@ est désormais substitué APRÈS copie via
+#      `substituteInPlace`, et un overlay force tout le système à
+#      utiliser notre extension patchée (au cas où `calamares-nixos`
+#      conserve une référence à la version stock de nixpkgs).
 #
-# Cette version (v2) élimine complètement le sed : le settings.conf
-# complet est écrit tel quel en Nix (chaîne littérale ci-dessous),
-# construit à partir du contenu RÉEL de calamares-nixos-extensions au
-# commit nixpkgs épinglé dans flake.lock (20b1ddd1aa5ace70c9468305030aa
-# 4f9ef79671b — la révision exacte qui a servi à builder l'ISO testée le
-# 20/09/2026), avec seulement les deux ajouts nécessaires (une instance
-# + une entrée de séquence). Zéro ambiguïté d'échappement shell : soit
-# ça compile avec le bon contenu, soit `nix build` échoue directement.
-#
-# TRANSPARENCE : voir aussi le premier test réel — l'erreur rencontrée
+# TRANSPARENCE : l'erreur rencontrée le 20/09/2026
 # ("experimental Nix feature flakes is disabled") venait du job STOCK
-# "nixos" (nixos-install), pas de ce fichier : corrigée séparément dans
-# common.nix (nix.settings.experimental-features). Cette étape
-# shellprocess elle-même n'a PAS ENCORE été testée en conditions réelles
-# (le premier test a échoué avant d'atteindre ce point de la séquence,
-# et de toute façon la version sed ne s'exécutait pas). Prochain test
-# réel à surveiller.
-#
-# Mécanisme (une fois que ça s'exécute) :
-# 1. Le job "nixos" (natif Calamares) partitionne, installe un NixOS de
-#    base et écrit /etc/nixos/{configuration,hardware-configuration}.nix
-#    — on ne touche PAS à ça, ce sont les réglages propres à CE disque
-#    précis (bootloader EFI/BIOS, UUIDs de partitions...).
-# 2. Notre étape "shellprocess" s'exécute juste après, chrootée dans le
-#    système fraîchement installé (dontChroot: false) :
-#    a. clone HiTech-OS dans /etc/nixos/hitech-os
-#    b. insère l'import de os/common.nix (services, durcissement — AUCUN
-#       réglage disque/bootloader dedans, donc pas de conflit avec ce que
-#       "nixos" vient d'écrire) juste après la ligne
-#       "./hardware-configuration.nix" du configuration.nix généré
-#    c. `nixos-rebuild boot` pour que ce soit actif dès le premier
-#       démarrage réel (pas besoin de "switch" : le système n'est pas
-#       encore démarré, on ne fait que fixer la génération de boot par
-#       défaut)
+# "nixos" (nixos-install), pas de ce fichier — corrigée dans common.nix
+# (nix.settings.experimental-features). Cette étape shellprocess
+# elle-même n'a PAS ENCORE été testée en conditions réelles.
 
 { pkgs, ... }:
 
@@ -62,6 +36,11 @@ let
       - "/run/current-system/sw/bin/nixos-rebuild boot"
   '';
 
+  # settings.conf COMPLET (copié tel quel depuis calamares-nixos-extensions
+  # au commit épinglé dans flake.lock, avec seulement :
+  #   - une instance supplémentaire (shellprocess@hitechos)
+  #   - une entrée correspondante dans la phase exec
+  # Le marqueur @out@ est substitué après copie (voir postInstall ci-dessous).
   hitechosSettingsConf = pkgs.writeText "settings.conf" ''
     # Configuration file for Calamares
     #
@@ -279,30 +258,49 @@ let
     quit-at-end: false
   '';
 
-  # Surcharge du paquet de config Calamares : notre settings.conf complet
-  # remplace le sien (pas de sed, pas de patch partiel — voir commentaire
-  # d'en-tête), et notre fichier de commandes shellprocess est copié à
-  # côté des autres fichiers de modules.
+  # Surcharge du paquet de config Calamares :
+  #   - notre settings.conf complet remplace le sien
+  #   - notre fichier shellprocess-hitechos.conf est copié à côté des
+  #     autres fichiers de modules
+  #   - @out@ dans settings.conf est substitué par le vrai store path
+  #     (sinon Calamares cherche un dossier littéral "@out@" et échoue
+  #     avec "FATAL: no sequence set")
   calamaresExtensionsHitechos = pkgs.calamares-nixos-extensions.overrideAttrs (old: {
     postInstall = (old.postInstall or "") + ''
+      mkdir -p $out/etc/calamares/modules
       cp ${hitechosShellprocessConf} $out/etc/calamares/modules/shellprocess-hitechos.conf
       cp ${hitechosSettingsConf} $out/etc/calamares/settings.conf
+      substituteInPlace $out/etc/calamares/settings.conf \
+        --replace "@out@" "$out"
     '';
   });
 
+  # Wrapper Calamares pointant explicitement vers notre extension patchée.
   calamaresNixosHitechos = pkgs.calamares-nixos.override {
     calamares-nixos-extensions = calamaresExtensionsHitechos;
   };
 
-  # Lance Calamares automatiquement à l'ouverture de session GNOME —
-  # transcrit de calamares.nix, avec notre paquet patché à la place du
-  # stock (pkgs.calamares-nixos).
+  # Lance Calamares automatiquement à l'ouverture de session GNOME.
+  # `name = "calamares"` correspond au fichier `calamares.desktop` fourni
+  # par le paquet calamares-nixos (PAS `io.calamares.calamares.desktop`
+  # — ce nom n'existe pas dans la version empaquetée pour NixOS 26.11).
   calamaresAutostart = pkgs.makeAutostartItem {
     name = "calamares";
     package = calamaresNixosHitechos;
   };
 in
 {
+  # Overlay : force TOUT le système (y compris les dépendances internes
+  # de calamares-nixos et tout autre paquet qui référencerait l'extension)
+  # à utiliser notre version patchée. Sans ça, `calamares-nixos` peut
+  # continuer à référencer silencieusement la version stock de nixpkgs et
+  # ignorer complètement notre settings.conf.
+  nixpkgs.overlays = [
+    (final: prev: {
+      calamares-nixos-extensions = calamaresExtensionsHitechos;
+    })
+  ];
+
   # --- Section équivalente à installation-cd-graphical-calamares.nix ---
   security.polkit.enable = true; # requis par pkexec (Calamares + nixos-install) — annule le mkDefault false de common.nix
   security.polkit.enablePkexecWrapper = true;
