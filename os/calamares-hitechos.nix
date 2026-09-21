@@ -287,6 +287,15 @@ let
     postInstall = (old.postInstall or "") + ''
       cp ${hitechosShellprocessConf} $out/etc/calamares/modules/shellprocess-hitechos.conf
       cp ${hitechosSettingsConf} $out/etc/calamares/settings.conf
+      # CRITIQUE : notre cp ci-dessus écrase settings.conf APRÈS que le
+      # postInstall d'origine ait déjà fait
+      # `substituteInPlace ... --replace-fail @out@ $out`. Notre copie
+      # réintroduit donc le placeholder brut "@out@" dans
+      # modules-search, ce qui empêche Calamares de trouver SES PROPRES
+      # modules (nixos, shellprocess, etc.) — observé en réel le
+      # 21/09/2026 : "FATAL: no sequence set" au lancement de Calamares.
+      # On refait donc la même substitution sur notre copie.
+      substituteInPlace $out/etc/calamares/settings.conf --replace-fail '@out@' "$out"
     '';
   });
 
