@@ -25,6 +25,25 @@ Voir [`docs/ROADMAP.md`](docs/ROADMAP.md) pour le détail des choix
 (NixOS vs Buildroot/Yocto, mode de survie edge, backend d'inférence, etc.)
 et le plan de développement par phases.
 
+## Tester l'ISO sur matériel réel
+
+Le dernier build validé est publié dans la release préliminaire
+[`live-iso`](https://github.com/HiTechTN/HiTech-OS/releases/tag/live-iso).
+Téléchargez l'ISO et son fichier `.sha256`, puis vérifiez l'intégrité avant
+de flasher :
+
+```console
+sha256sum --check hitechos-live-*.iso.sha256
+sudo dd if=hitechos-live-*.iso of=/dev/sdX bs=16M status=progress conv=fsync
+```
+
+Remplacez `/dev/sdX` par le périphérique USB entier, jamais par une partition
+comme `/dev/sdX1`. Démarrez ensuite en mode UEFI sur la clé et choisissez
+**HiTech-OS — Installateur** dans GNOME pour tester Calamares. L'image live
+utilise le compte `nixos` avec le mot de passe temporaire `hitechos`; ces
+identifiants ne sont valables que pour l'ISO de test et ne doivent pas être
+réutilisés sur un système installé.
+
 ## Fondateur
 
 **Mohamed Azmi Kaaniche** — [HiTechTN](https://github.com/HiTechTN) / HiTechLab

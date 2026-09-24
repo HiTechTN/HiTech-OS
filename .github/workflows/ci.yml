@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   ai-daemon:
@@ -52,6 +53,7 @@ jobs:
 
   iso-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: write   # requis pour publier/mettre à jour la Release ci-dessous
     steps:
@@ -61,26 +63,41 @@ jobs:
         run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L --extra-experimental-features "nix-command flakes"
       - name: Taille de l'ISO générée
         run: du -sh result/iso/*
+      - name: Générer le checksum SHA-256
+        run: |
+          ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
+          test -n "$ISO_PATH"
+          ISO_NAME=$(basename "$ISO_PATH")
+          (cd "$(dirname "$ISO_PATH")" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
       - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
         uses: actions/upload-artifact@v4
         with:
           name: hitechos-live-iso
-          path: result/iso/*.iso
+          path: |
+            result/iso/*.iso
+            result/iso/*.iso.sha256
           retention-days: 90   # max habituellement autorisé pour un repo public
-      - name: Publier/mettre à jour la Release "live-iso" (si < 2 Go — limite dure de GitHub)
-        if: github.ref == 'refs/heads/main'
+      - name: Publier/mettre à jour la Release "live-iso"
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ISO_PATH=$(ls result/iso/*.iso)
+          set -euo pipefail
+          ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
+          SHA_PATH="$ISO_PATH.sha256"
+          test -f "$ISO_PATH"
+          test -f "$SHA_PATH"
           ISO_SIZE=$(stat -c%s "$ISO_PATH")
           LIMIT=$((2 * 1000 * 1000 * 1000))  # 2 Go, limite fixe imposée par GitHub Releases
           if [ "$ISO_SIZE" -ge "$LIMIT" ]; then
             echo "::warning::ISO de $((ISO_SIZE / 1000 / 1000)) Mo — dépasse la limite de 2 Go des Releases GitHub. Récupère-la via l'onglet Artifacts de ce run à la place."
             exit 0
           fi
-          gh release delete live-iso --yes --cleanup-tag || true
-          gh release create live-iso "$ISO_PATH" \
-            --title "HiTech-OS — ISO live (dernier build de main)" \
-            --notes "Générée automatiquement depuis le commit ${{ github.sha }}. Cette release est écrasée à chaque push sur main — ce n'est pas une version stable figée." \
-            --prerelease
+          if gh release view live-iso >/dev/null 2>&1; then
+            gh release upload live-iso "$ISO_PATH" "$SHA_PATH" --clobber
+          else
+            gh release create live-iso "$ISO_PATH" "$SHA_PATH" \
+              --title "HiTech-OS — ISO live (dernier build de main)" \
+              --notes "Générée automatiquement depuis le commit ${{ github.sha }}. Cette release est mise à jour à chaque build réussi de main. Vérifiez le fichier .sha256 avant de flasher l’ISO." \
+              --prerelease
+          fi
