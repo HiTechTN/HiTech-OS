@@ -68,7 +68,7 @@ jobs:
           ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
           test -n "$ISO_PATH"
           ISO_NAME=$(basename "$ISO_PATH")
-          (cd "$(dirname "$ISO_PATH")" && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
+          sha256sum "$ISO_PATH" > "result/iso/$ISO_NAME.sha256"
       - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
         uses: actions/upload-artifact@v4
         with:
