@@ -63,19 +63,25 @@ jobs:
         run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L --extra-experimental-features "nix-command flakes"
       - name: Taille de l'ISO générée
         run: du -sh result/iso/*
+      - name: Copier l'ISO hors du store Nix
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp --dereference result/iso/*.iso dist/
       - name: Générer le checksum SHA-256
         run: |
-          ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
+          set -euo pipefail
+          ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
           test -n "$ISO_PATH"
           ISO_NAME=$(basename "$ISO_PATH")
-          sha256sum "$ISO_PATH" > "result/iso/$ISO_NAME.sha256"
+          sha256sum "$ISO_PATH" > "dist/$ISO_NAME.sha256"
       - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
         uses: actions/upload-artifact@v4
         with:
           name: hitechos-live-iso
           path: |
-            result/iso/*.iso
-            result/iso/*.iso.sha256
+            dist/*.iso
+            dist/*.iso.sha256
           retention-days: 90   # max habituellement autorisé pour un repo public
       - name: Publier/mettre à jour la Release "live-iso"
         if: github.event_name != 'pull_request'
@@ -83,7 +89,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
+          ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
           SHA_PATH="$ISO_PATH.sha256"
           test -f "$ISO_PATH"
           test -f "$SHA_PATH"
