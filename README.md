@@ -34,9 +34,10 @@ téléchargez toutes les parties `.iso.part-*` ainsi que le fichier `.sha256`,
 puis reconstruisez et vérifiez l'image :
 
 ```console
-cat hitechos-live-*.iso.part-* > hitechos-live.iso
-sha256sum --check hitechos-live-*.iso.sha256
-sudo dd if=hitechos-live.iso of=/dev/sdX bs=16M status=progress conv=fsync
+ISO_PREFIX=$(printf '%s\n' *.iso.part-00 | sed 's/\.part-00$//')
+cat "$ISO_PREFIX".part-* > "$ISO_PREFIX"
+sha256sum --check "$ISO_PREFIX.sha256"
+sudo dd if="$ISO_PREFIX" of=/dev/sdX bs=16M status=progress conv=fsync
 ```
 
 Remplacez `/dev/sdX` par le périphérique USB entier, jamais par une partition
