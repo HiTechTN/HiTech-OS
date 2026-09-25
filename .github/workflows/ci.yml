@@ -75,6 +75,12 @@ jobs:
           test -n "$ISO_PATH"
           ISO_NAME=$(basename "$ISO_PATH")
           sha256sum "$ISO_PATH" > "dist/$ISO_NAME.sha256"
+      - name: Découper l'ISO pour respecter la limite GitHub Releases
+        run: |
+          set -euo pipefail
+          ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
+          split --bytes=1900M --numeric-suffixes=0 --suffix-length=2 \
+            "$ISO_PATH" "$ISO_PATH.part-"
       - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
         uses: actions/upload-artifact@v4
         with:
@@ -91,19 +97,13 @@ jobs:
           set -euo pipefail
           ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
           SHA_PATH="$ISO_PATH.sha256"
+          mapfile -t PARTS < <(find dist -maxdepth 1 -type f -name '*.iso.part-*' | sort)
           test -f "$ISO_PATH"
           test -f "$SHA_PATH"
+          test "${#PARTS[@]}" -gt 1
           ISO_SIZE=$(stat -c%s "$ISO_PATH")
-          LIMIT=$((2 * 1000 * 1000 * 1000))  # 2 Go, limite fixe imposée par GitHub Releases
-          if [ "$ISO_SIZE" -ge "$LIMIT" ]; then
-            echo "::warning::ISO de $((ISO_SIZE / 1000 / 1000)) Mo — dépasse la limite de 2 Go des Releases GitHub. Récupère-la via l'onglet Artifacts de ce run à la place."
-            exit 0
-          fi
-          if gh release view live-iso >/dev/null 2>&1; then
-            gh release upload live-iso "$ISO_PATH" "$SHA_PATH" --clobber
-          else
-            gh release create live-iso "$ISO_PATH" "$SHA_PATH" \
-              --title "HiTech-OS — ISO live (dernier build de main)" \
-              --notes "Générée automatiquement depuis le commit ${{ github.sha }}. Cette release est mise à jour à chaque build réussi de main. Vérifiez le fichier .sha256 avant de flasher l’ISO." \
-              --prerelease
-          fi
+          gh release delete live-iso --yes --cleanup-tag || true
+          gh release create live-iso "${PARTS[@]}" "$SHA_PATH" \
+            --title "HiTech-OS — ISO live (dernier build de main)" \
+            --notes "ISO générée depuis le commit ${{ github.sha }} ($((ISO_SIZE / 1000 / 1000)) Mo). Téléchargez toutes les parties .iso.part-XX dans l’ordre, reconstruisez l’ISO avec \`cat *.iso.part-* > image.iso\`, puis vérifiez \`sha256sum --check *.iso.sha256\` avant de flasher." \
+            --prerelease

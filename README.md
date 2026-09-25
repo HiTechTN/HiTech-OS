@@ -29,12 +29,14 @@ et le plan de développement par phases.
 
 Le dernier build validé est publié dans la release préliminaire
 [`live-iso`](https://github.com/HiTechTN/HiTech-OS/releases/tag/live-iso).
-Téléchargez l'ISO et son fichier `.sha256`, puis vérifiez l'intégrité avant
-de flasher :
+Comme l'image graphique dépasse la limite de taille d'un asset GitHub,
+téléchargez toutes les parties `.iso.part-*` ainsi que le fichier `.sha256`,
+puis reconstruisez et vérifiez l'image :
 
 ```console
+cat hitechos-live-*.iso.part-* > hitechos-live.iso
 sha256sum --check hitechos-live-*.iso.sha256
-sudo dd if=hitechos-live-*.iso of=/dev/sdX bs=16M status=progress conv=fsync
+sudo dd if=hitechos-live.iso of=/dev/sdX bs=16M status=progress conv=fsync
 ```
 
 Remplacez `/dev/sdX` par le périphérique USB entier, jamais par une partition
