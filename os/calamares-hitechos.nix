@@ -36,9 +36,10 @@
 #    base et écrit /etc/nixos/{configuration,hardware-configuration}.nix
 #    — on ne touche PAS à ça, ce sont les réglages propres à CE disque
 #    précis (bootloader EFI/BIOS, UUIDs de partitions...).
-# 2. Notre étape "shellprocess" s'exécute juste après, chrootée dans le
-#    système fraîchement installé (dontChroot: false) :
-#    a. clone HiTech-OS dans /etc/nixos/hitech-os
+# 2. Notre étape "shellprocess" s'exécute juste après dans l'ISO live
+#    (dontChroot: true), où Git est installé. Elle utilise ROOT pour
+#    modifier le système cible, puis lance nixos-rebuild via chroot :
+#    a. clone HiTech-OS dans /etc/nixos/hitech-os du système cible
 #    b. insère l'import de os/common.nix (services, durcissement — AUCUN
 #       réglage disque/bootloader dedans, donc pas de conflit avec ce que
 #       "nixos" vient d'écrire) juste après la ligne
@@ -53,8 +54,8 @@
 let
   hitechosShellprocessConf = pkgs.writeText "shellprocess-hitechos.conf" ''
     ---
-    # Commandes exécutées CHROOTÉES dans le système fraîchement installé
-    # (dontChroot: false => ROOT == /, voir doc shellprocess de Calamares).
+    # Commandes exécutées dans l'ISO live, avec ROOT comme racine cible
+    # (dontChroot: true, voir doc shellprocess de Calamares).
     #
     # HISTORIQUE : la première version utilisait `nix-shell -p git --run
     # '...'`, qui échouait en réel (21/09/2026, voir screencast) avec
@@ -64,14 +65,19 @@ let
     # système installé). Conséquence grave observée : l'échec de cette
     # commande faisait sauter TOUS les jobs suivants (mots de passe
     # utilisateur/root, démontage propre des filesystems).
-    # Fix : git est maintenant préinstallé sur l'ISO (iso.nix), donc plus
-    # besoin de nix-shell ici ; et nixos-rebuild reçoit explicitement le
-    # flag flakes au cas où (défense en profondeur).
-    dontChroot: false
+    # Git est exécuté dans l'ISO, puis la configuration cible est modifiée
+    # via ROOT. Le rebuild s'exécute dans le système cible chrooté.
+    # Les variables Calamares sont échappées à Nix avec ''${...}.
+    dontChroot: true
     script:
-      - "/run/current-system/sw/bin/git clone --depth 1 https://github.com/HiTechTN/HiTech-OS.git /etc/nixos/hitech-os"
-      - "sed -i '/hardware-configuration.nix/a\\      /etc/nixos/hitech-os/os/common.nix' /etc/nixos/configuration.nix"
-      - "/run/current-system/sw/bin/nixos-rebuild boot --option extra-experimental-features 'nix-command flakes'"
+      - command: "/run/current-system/sw/bin/git clone --depth 1 https://github.com/HiTechTN/HiTech-OS.git ''${ROOT}/etc/nixos/hitech-os"
+        timeout: 600
+        verbose: true
+      - command: "sed -i '/hardware-configuration.nix/a\\      /etc/nixos/hitech-os/os/common.nix' ''${ROOT}/etc/nixos/configuration.nix"
+        timeout: 30
+      - command: "${pkgs.coreutils}/bin/chroot ''${ROOT} /nix/var/nix/profiles/system/sw/bin/nixos-rebuild boot --option extra-experimental-features 'nix-command flakes'"
+        timeout: 3600
+        verbose: true
   '';
 
   hitechosSettingsConf = pkgs.writeText "settings.conf" ''
