@@ -104,6 +104,7 @@ jobs:
           ISO_SIZE=$(stat -c%s "$ISO_PATH")
           gh release delete live-iso --yes --cleanup-tag || true
           gh release create live-iso "${PARTS[@]}" "$SHA_PATH" \
-            --title "HiTech-OS — ISO live (dernier build de main)" \
-            --notes "ISO générée depuis le commit ${{ github.sha }} ($((ISO_SIZE / 1000 / 1000)) Mo). Téléchargez toutes les parties .iso.part-XX dans l’ordre, reconstruisez l’ISO avec \`cat *.iso.part-* > image.iso\`, puis vérifiez \`sha256sum --check *.iso.sha256\` avant de flasher." \
+            --target "$GITHUB_SHA" \
+            --title "HiTech-OS — ISO live (build ${GITHUB_REF_NAME})" \
+            --notes "ISO générée depuis la branche ${GITHUB_REF_NAME}, commit ${GITHUB_SHA} ($((ISO_SIZE / 1000 / 1000)) Mo). Téléchargez toutes les parties .iso.part-XX dans l’ordre, reconstruisez l’ISO avec \`cat *.iso.part-* > image.iso\`, puis vérifiez \`sha256sum --check *.iso.sha256\` avant de flasher." \
             --prerelease
