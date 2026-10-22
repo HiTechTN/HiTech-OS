@@ -49,15 +49,78 @@
     }];
   };
 
+  # Dégradation gracieuse des secrets télémétrie (fix boot 22/10/2026) :
+  # AVANT ce réglage, un premier boot sans secrets embarqués plantait
+  # mosquitto au démarrage ("Failed at step CREDENTIALS" — le module
+  # NixOS branche hashedPasswordFile sur systemd LoadCredential=, qui
+  # ÉCHOUE FATALEMENT si le fichier source est absent) et telegraf
+  # ("Failed to load environment files"). Conséquence : le "système
+  # nerveux" (MQTT → Telegraf → InfluxDB) mort dès le premier boot.
+  # MAINTENANT : systemd-tmpfiles crée un fichier placeholder (hash
+  # sha512-crypt d'un mot de passe jeton "placeholder-change-me") UNIQUEMENT
+  # s'il n'existe pas encore (la ligne tmpfiles `f` laisse intact tout
+  # fichier déjà présent — le vrai secret injecté au déploiement par
+  # agenix/sops-nix n'est jamais écrasé). Résultat : broker MQTT joignable
+  # et démarrable partout, mais authentification refusée tant que le vrai
+  # secret n'est pas déployé (comportement "fail-closed" pour l'auth,
+  # "fail-open" pour la disponibilité du service).
+  systemd.tmpfiles.rules = [
+    "d /run/secrets 0700 root root -"
+    # Hash $7$ (format natif mosquitto_passwd, obligatoire avec le plugin
+    # password-file strict de mosquitto 2.1.x — un hash crypt système $6$
+    # est rejeté : "Unable to decode line", vérifié en réel le 22/10/2026).
+    # IMPORTANT : le module NixOS PREFIXE le nom d'utilisateur lui-même
+    # (addFile → "user:$(cat secret)") — le fichier secret ne doit donc
+    # contenir QUE le hash, SANS préfixe "user:" (doc du module
+    # hashedPasswordFile : "remove the username: prefix"). Avec le préfixe,
+    # mosquitto recevait "user:user:hash" → décodage impossible → crash.
+    # Généré via : mosquitto_passwd -b -c /tmp/f hitechos-agent placeholder-change-me
+    # puis retrait du préfixe "hitechos-agent:".
+    "f /run/secrets/mosquitto-hitechos-agent 0600 root root - $7$1000$Z2MxgetdsMKH0Pguep3B46r5K/HZF6YOGlO50UO7qNEb4JEwoZD0+NQIQcN8OAA0olKDdD0bqaoe5zla7De2Og==$YE7drJO/5evWNUEb0i4Mfeja4+CKxTvGFjVIOpE90kxdffeOHYTriB3E8Mv24QnfARuVXmWH5E8mrFE3Feg51g=="
+    # Placeholder telegraf (optionnel mais même mécanisme) : un fichier
+    # vide "INFLUX_TOKEN=" évite tout ÉCHOU DE TYPE du côté systemd et
+    # garantit que l'option environmentFiles (type `absolute path` dans le
+    # module NixOS — le prefixe "-" de systemd est interdit par le typage)
+    # reste satisfiable. Comme ci-dessus : jamais écrasé si déjà présent.
+    "f /run/secrets/telegraf-influx-token 0600 root root - INFLUX_TOKEN="
+    # Identifiants MQTT de pontage telegraf→mosquitto : telegraf CRASHAIT
+    # ("connection refused"/auth) sans broker joignable ET sans creds —
+    # le champ mqtt_consumer pointe vers $MQTT_USER/$MQTT_PASSWORD via
+    # l'env-file ci-contre. Placeholder = même mot de passe que le hash
+    # mosquitto ci-dessus ; les vrais secrets (Phase 6) devront fournir
+    # les deux fichiers de façon cohérente.
+    # IMPORTANT : systemd EnvironmentFile attend UNE variable par ligne —
+    # les deux paires sur une seule ligne faisaient de MQTT_USER une
+    # variable unique mal formée ("hitechos-agent MQTT_PASSWORD=...")
+    # et laissait MQTT_PASSWORD indéfini : telegraf (strict env handling
+    # par défaut depuis v1.38) envoyait alors le littéral "$MQTT_USER"
+    # → CONNACK "not authorised" en boucle, service en start-limit-hit.
+    # L'échappement \n est interprété par systemd-tmpfiles (docs :
+    # "may contain C-style escapes").
+    "f /run/secrets/telegraf-mqtt-creds 0600 root root - MQTT_USER=hitechos-agent\\nMQTT_PASSWORD=placeholder-change-me"
+  ];
+
   services.telegraf = {
     enable = true;
-    environmentFiles = [ "/run/secrets/telegraf-influx-token" ]; # fournit $INFLUX_TOKEN
+    # Le fichier est GARANTI présent par systemd-tmpfiles ci-dessus
+    # (placeholder "INFLUX_TOKEN=" si absent) : le service ne rate plus
+    # son démarrage sur un nœud sans secret. Auth sortante vers InfluxDB
+    # en échec loggé tant que le vrai token n'est pas injecté ; dès le
+    # déploiement (agenix/sops-nix) + restart, la télémétrie remonte.
+    environmentFiles = [
+      "/run/secrets/telegraf-influx-token" # fournit $INFLUX_TOKEN
+      "/run/secrets/telegraf-mqtt-creds" # fournit $MQTT_USER/$MQTT_PASSWORD
+    ];
     extraConfig = {
       inputs.mqtt_consumer = [{
         servers = [ "tcp://127.0.0.1:1883" ];
         topics = [ "hitechos/+/+/+" ];
         data_format = "json";
         name_override = "hitechos_telemetry";
+        # Broker local avec allow_anonymous=false (users définis) : sans
+        # creds, l'agent telegraf mourait au démarrage (CONNACK refusé).
+        username = "$MQTT_USER";
+        password = "$MQTT_PASSWORD";
       }];
       outputs.influxdb_v2 = [{
         urls = [ "http://127.0.0.1:8086" ];
@@ -66,6 +129,15 @@
         bucket = "hitechos";
       }];
     };
+  };
+
+  # Ordre de démarrage : telegraf dial MQTT FATALEMENT au boot si le
+  # broker n'écoute pas encore ("connection refused" → exit 1, observé
+  # en réel). On dépend doucement (wants=, pas requires=) de mosquitto
+  # pour que celui-ci démarre en premier quand les deux sont actifs.
+  systemd.services.telegraf = {
+    after = [ "mosquitto.service" ];
+    wants = [ "mosquitto.service" ];
   };
 
   services.influxdb2.enable = lib.mkDefault true;
