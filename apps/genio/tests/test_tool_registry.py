@@ -106,6 +106,8 @@ def test_store_paths_are_accepted(path):
 @pytest.mark.parametrize("path,expected", [
     ("/public", "public"), ("/public/x.pdf", "public/x.pdf"),
     (" /agents/genio/x.csv ", "agents/genio/x.csv"),
+    ("public/", "public"), ("public//x.pdf", "public/x.pdf"),
+    ("public///HCF//", "public/HCF"),
 ])
 def test_leading_slash_is_normalised(path, expected):
     """Users (and local models) often write '/public' — accept, then normalise."""
@@ -113,7 +115,7 @@ def test_leading_slash_is_normalised(path, expected):
 
 
 @pytest.mark.parametrize("path", [
-    "/etc/passwd", "public/../../etc/passwd", "public//x", "public/./x",
+    "/etc/passwd", "public/../../etc/passwd", "public/./x",
     "HCF/x", "public/x\x00.pdf", "public/" + "a" * 400,
 ])
 def test_store_paths_are_rejected(path):

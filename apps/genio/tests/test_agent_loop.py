@@ -312,3 +312,18 @@ def test_approval_payload_carries_the_policy_verdict(tmp_path):
     verdict = paused["approval"]["policy"]
     assert verdict["decision"] == "REQUIRE_CONFIRMATION"
     assert verdict["rule"] == "P7_r2_confirmation"
+
+
+def test_cancel_pending_clears_a_paused_action(tmp_path):
+    plans = [{"thought": "restart it",
+              "action": {"tool": "t.r2", "args": {"target": "cron"}}, "final": None}]
+    loop, broker, backend, memory, events, _ = make_loop(tmp_path, plans)
+    paused = loop.run("restart cron", token())
+    session_id = paused["session_id"]
+    assert memory.get_pending(session_id) is not None
+
+    assert loop.cancel_pending(session_id, "operator denied") is True
+    assert memory.get_pending(session_id) is None
+    assert loop.cancel_pending(session_id) is False
+    assert any(e.get("phase") == "reflect" and "denied" in str(e.get("detail"))
+               for e in events)

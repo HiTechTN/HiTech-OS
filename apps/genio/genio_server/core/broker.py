@@ -226,7 +226,7 @@ class ApprovalStore:
             return [
                 {"id": p.id, "tool": p.tool, "intent": p.intent, "risk": p.risk,
                  "expires_in_s": max(0, round(p.expires_at - time.time()))}
-                for p in self._pending.values()
+                for p in self._pending.values() if not p.granted
             ]
 
     def grant(self, approval_id: str, approver: str, ttl_s: int = 120) -> str:
@@ -248,6 +248,16 @@ class ApprovalStore:
             args_hash=item.args_hash,
             meta={"approval_id": item.id, "approver": approver, "intent": item.intent},
         )
+
+    def deny(self, approval_id: str, approver: str = "local-human") -> dict[str, Any]:
+        """Discard a pending request without issuing any token."""
+        with self._lock:
+            self._purge()
+            item = self._pending.pop(approval_id, None)
+            if not item:
+                raise KeyError("unknown or expired approval request")
+            return {"id": item.id, "tool": item.tool, "session": item.session,
+                    "intent": item.intent, "approver": approver}
 
 
 # --------------------------------------------------------------------------- tools
@@ -407,7 +417,7 @@ class Broker:
     def tools(self) -> list[dict[str, Any]]:
         return [
             {"id": t.id, "risk": t.risk.value, "description": t.description,
-             "cap": t.cap, "rate_per_min": t.rate_per_min,
+             "cap": t.cap, "tags": list(t.tags), "rate_per_min": t.rate_per_min,
              "params": t.params, "requires_approval": t.risk is Risk.R2}
             for t in sorted(self._tools.values(), key=lambda x: (x.risk.value, x.id))
         ]

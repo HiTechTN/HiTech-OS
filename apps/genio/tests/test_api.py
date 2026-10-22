@@ -15,10 +15,10 @@ def _session() -> str:
     return res.json()["token"]
 
 
-def test_health_reports_phase5():
+def test_health_reports_phase6():
     body = client.get("/health").json()
     assert body["status"] == "ok"
-    assert body["phase"] == 5
+    assert body["phase"] == 6
     assert body["broker"]["tools"] >= 9
     assert body["mind"]["max_steps"] >= 1
     assert body["registry"]["count"] >= 9
@@ -31,6 +31,8 @@ def test_tools_catalogue():
     ids = {tool["id"] for tool in body["tools"]}
     assert {"telemetry.snapshot", "file.write", "service.restart",
             "store.list", "store.extract", "store.media_info", "store.mkdir"} <= ids
+    for tool in body["tools"]:
+        assert tool["cap"] and isinstance(tool["tags"], list)
 
 
 def test_invoke_without_token_is_401():
@@ -205,3 +207,41 @@ def test_portal_status_is_honest_about_offline_store():
     body = client.get("/portal/status").json()
     assert "base_url" in body and "auth_mode" in body
     assert body["ok"] in (True, False)
+
+
+# --------------------------------------------------------------------------- denial
+def test_deny_removes_pending_approval():
+    token = _session()
+    res = client.post("/tools/service.restart/invoke",
+                      json={"args": {"unit": "cron.service"}},
+                      headers={"X-Genio-Cap": token})
+    assert res.status_code == 409
+    approval_id = res.json()["approval_id"]
+
+    denied = client.post(f"/approvals/{approval_id}/deny",
+                         json={"approver": "pytest-human"})
+    assert denied.status_code == 200, denied.text
+    assert denied.json()["denied"] is True
+
+    remaining = client.get("/approvals").json()["approvals"]
+    assert all(item["id"] != approval_id for item in remaining)
+    assert client.post(f"/approvals/{approval_id}/grant", json={}).status_code == 404
+
+
+def test_granted_approval_leaves_the_pending_queue():
+    token = _session()
+    approval_id = client.post(
+        "/tools/service.restart/invoke",
+        json={"args": {"unit": "cron.service"}},
+        headers={"X-Genio-Cap": token},
+    ).json()["approval_id"]
+
+    granted = client.post(f"/approvals/{approval_id}/grant", json={"approver": "pytest"})
+    assert granted.status_code == 200
+    pending = client.get("/approvals").json()["approvals"]
+    assert all(item["id"] != approval_id for item in pending)
+
+
+def test_deny_unknown_approval_is_404():
+    res = client.post("/approvals/apr_doesnotexist/deny", json={})
+    assert res.status_code == 404

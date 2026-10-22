@@ -149,6 +149,9 @@ def check_store_path(path: str, *, allow_empty: bool = False) -> str:
         raise ToolArgError("path is required")
     if len(value) > 400 or "\x00" in value:
         raise ToolArgError("invalid path")
+    # Local models often emit "public//" or "public/"; collapse the noise but
+    # still reject any '.' / '..' segment (traversal stays fatal).
+    value = re.sub(r"/{2,}", "/", value).strip("/")
     parts = value.split("/")
     if any(part in ("", ".", "..") for part in parts):
         raise ToolArgError("path must not contain empty, '.' or '..' segments")
@@ -267,7 +270,8 @@ def store_tools(client: StoreClient) -> list[ToolSpec]:
 
     return [
         ToolSpec("store.list", Risk.R0,
-                 "List a hitech-store directory (folders, files, sizes, checksums).",
+                 "List a hitech-store directory (folders, files, sizes, checksums). "
+                 "Path is a folder like 'public' or 'public/HCF' (no trailing slash).",
                  "store:read", {"path": {"type": "str", "required": True}},
                  t_list, 120, lambda a: a.get("path") or "/", v_list,
                  tags=("store", "directories")),

@@ -172,6 +172,18 @@ class AgentLoop:
         brief = self._state_brief(self._snapshot())
         return self._drive(session_id, session_token, brief, [step], caps_set, subject)
 
+    def cancel_pending(self, session_id: str, reason: str = "denied by human") -> bool:
+        """Drop a paused action after a human denial (no execution, no resume)."""
+        pending = self.memory.get_pending(session_id)
+        if not pending:
+            return False
+        self.memory.clear_pending(session_id)
+        self.memory.append_message(session_id, "assistant", f"Cancelled — {reason}.")
+        self._emit("reflect", session_id=session_id,
+                   step=int(pending.get("step") or 0),
+                   detail=f"approval denied: {reason}")
+        return True
+
     # ------------------------------------------------------------------ loop
     def _drive(self, session_id: str, session_token: str, brief: str,
                steps: list[AgentStep], caps_set: set[str], subject: str) -> dict[str, Any]:

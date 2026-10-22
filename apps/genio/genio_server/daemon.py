@@ -37,7 +37,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 try:  # package mode (uvicorn genio_server.daemon:app)
@@ -51,7 +52,7 @@ except ImportError:  # script mode (cd genio_server && uvicorn daemon:app)
     from core import caps, memory as memory_mod, model_router, system_monitor  # type: ignore[no-redef]
     from core import policy_engine, store_client, tool_registry  # type: ignore[no-redef]
 
-VERSION = "0.4.0-phase4-5"
+VERSION = "0.6.0-phase6"
 HOST = os.getenv("GENIO_HOST", "127.0.0.1")
 PORT = int(os.getenv("GENIO_PORT", "8765"))
 TICK_SECONDS = float(os.getenv("GENIO_TICK_SECONDS", "5"))
@@ -182,6 +183,12 @@ class MessageBody(BaseModel):
     approval_token: str | None = None
 
 
+class DenyBody(BaseModel):
+    approver: str = Field("local-human", max_length=64)
+    session_id: str | None = Field(None, max_length=80)
+    reason: str = Field("denied by human", max_length=200)
+
+
 class ApproveBody(BaseModel):
     session_id: str = Field(..., max_length=80)
     approval_id: str = Field(..., max_length=80)
@@ -192,7 +199,7 @@ class ApproveBody(BaseModel):
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
-        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 5,
+        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 6,
         "uptime_s": round(time.time() - STATE["started_at"], 1),
         "agent": {
             "loop_running": STATE["loop_running"], "ticks": STATE["ticks"],
@@ -307,6 +314,24 @@ async def grant_approval(approval_id: str, body: GrantBody | None = None) -> dic
              "tool": pending.tool if pending else None})
     return {"ok": True, "approval_token": token, "expires_in_s": 120}
 
+
+@app.post("/approvals/{approval_id}/deny")
+async def deny_approval(approval_id: str, body: DenyBody | None = None) -> dict[str, Any]:
+    """Human denial: discard the pending request and cancel a paused agent turn."""
+    payload = body or DenyBody()
+    try:
+        item = BROKER.approvals.deny(approval_id, payload.approver)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    cancelled = False
+    if payload.session_id:
+        cancelled = AGENT.cancel_pending(payload.session_id, payload.reason)
+    publish({"type": "approval", "approval_id": approval_id,
+             "decision": "denied", "approver": payload.approver,
+             "tool": item["tool"], "session_id": payload.session_id})
+    log.warning("R2 approval denied by %r for %s", payload.approver, item["tool"])
+    return {"ok": True, "denied": True, "cancelled": cancelled,
+            "tool": item["tool"], "intent": item["intent"]}
 
 # --------------------------------------------------------------------------- audit
 @app.get("/audit/verify")
@@ -456,6 +481,16 @@ async def agent_events(request: Request) -> StreamingResponse:
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+# --------------------------------------------------------------------------- web ui
+WEB_DIST = Path(__file__).resolve().parent.parent / "genio_web" / "dist"
+if WEB_DIST.is_dir():
+    app.mount("/ui", StaticFiles(directory=WEB_DIST, html=True), name="genio-web")
+
+    @app.get("/", include_in_schema=False)
+    async def web_root() -> RedirectResponse:
+        return RedirectResponse("/ui/")
 
 
 # --------------------------------------------------------------------------- main
