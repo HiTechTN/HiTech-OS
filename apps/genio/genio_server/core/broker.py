@@ -18,7 +18,6 @@ under an allowed root, unit regex + deny-list.
 from __future__ import annotations
 
 import hashlib
-import html as html_mod
 import json
 import logging
 import os
@@ -26,9 +25,6 @@ import re
 import subprocess
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -46,7 +42,6 @@ DENY_UNITS = {
     "systemd-logind.service", "systemd-journald.service", "polkit.service",
 }
 DENY_UNIT_PREFIXES = ("systemd-", "user@", "getty@")
-STORE_URL = os.getenv("HITECH_STORE_URL", "http://127.0.0.1:8095").rstrip("/")
 MIN_ENV = {
     "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
     "LANG": "C", "LC_ALL": "C",
@@ -269,6 +264,8 @@ class ToolSpec:
     # Semantic validation that must run *before* the risk gate, so a human is
     # never asked to approve an action whose arguments are already illegal.
     validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # Catalogue grouping (system / store / documents / media / directories).
+    tags: tuple[str, ...] = ()
 
 
 def _run(argv: list[str], timeout: float = 5.0) -> tuple[int, str, str]:
@@ -311,34 +308,8 @@ def _resolve_under(base: Path, rel: str) -> Path:
     return target
 
 
-def _store_get(path: str, timeout: float = 6.0) -> dict[str, Any]:
-    if not path.startswith("/"):
-        path = "/" + path
-    if ".." in path.split("/"):
-        raise ToolArgError("invalid store path")
-    url = STORE_URL + path
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"hitech-store HTTP {exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"hitech-store unreachable: {exc}") from exc
-
-
-def _sanitize_html(raw: str) -> str:
-    """Untrusted extraction HTML → plain text (prompt-injection surface reduction)."""
-    text = re.sub(r"(?i)<(script|style)\b.*?</\1>", " ", raw, flags=re.S)
-    text = re.sub(r"<br\s*/?>|</p>|</h4>|</tr>|</div>", "\n", text, flags=re.I)
-    text = re.sub(r"</td>", " | ", text, flags=re.I)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = html_mod.unescape(text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-def default_tools(state_dir: Path) -> list[ToolSpec]:
+def system_tools(state_dir: Path) -> list[ToolSpec]:
+    """Local (non-store) tools: telemetry, services, sandboxed writes, restarts."""
     files_root = (Path(state_dir) / "files").resolve()
 
     def t_telemetry(_: dict[str, Any]) -> dict[str, Any]:
@@ -362,18 +333,6 @@ def default_tools(state_dir: Path) -> list[ToolSpec]:
         props = dict(zip(("active_state", "sub_state", "main_pid"), vals.splitlines()))
         return {"unit": unit, "is_active_rc": rc, "stdout": out,
                 "stderr": err, **props}
-
-    def t_store_list(args: dict[str, Any]) -> dict[str, Any]:
-        data = _store_get("/api/drive/list?path=" + urllib.parse.quote(args["path"]))
-        return {"path": data.get("path"), "files": [
-            {"name": f.get("name"), "size": f.get("size"), "kind": f.get("kind"),
-             "sha256": f.get("sha256")} for f in data.get("files", [])][:100]}
-
-    def t_store_extract(args: dict[str, Any]) -> dict[str, Any]:
-        data = _store_get("/api/drive/extract?path=" + urllib.parse.quote(args["path"]))
-        text = _sanitize_html(data.get("html", ""))
-        return {"kind": data.get("kind"), "truncated": data.get("truncated"),
-                "chars": len(text), "text": text[:8000]}
 
     def v_path(args: dict[str, Any]) -> dict[str, Any]:
         _resolve_under(files_root, args["path"])
@@ -407,28 +366,37 @@ def default_tools(state_dir: Path) -> list[ToolSpec]:
                  "service:read", {}, t_services, 120, lambda a: "systemd"),
         ToolSpec("service.status", Risk.R0, "Status of one systemd unit.",
                  "service:read", {"unit": {"type": "str", "required": True}},
-                 t_service_status, 120, lambda a: a.get("unit", ""), v_unit),
-        ToolSpec("store.list", Risk.R0, "List a directory on the hitech-store drive.",
-                 "store:read", {"path": {"type": "str", "required": True}},
-                 t_store_list, 120, lambda a: a.get("path", "")),
-        ToolSpec("store.extract", Risk.R0, "Extract document text from hitech-store (sanitized).",
-                 "store:read", {"path": {"type": "str", "required": True}},
-                 t_store_extract, 60, lambda a: a.get("path", "")),
+                 t_service_status, 120, lambda a: a.get("unit", ""), v_unit,
+                 tags=("system",)),
         ToolSpec("file.write", Risk.R1, "Write a text file under the Genio state dir.",
                  "fs:write", {"path": {"type": "str", "required": True},
                               "content": {"type": "str", "required": True}},
-                 t_file_write, 10, lambda a: a.get("path", ""), v_path),
+                 t_file_write, 10, lambda a: a.get("path", ""), v_path,
+                 tags=("system", "write")),
         ToolSpec("service.restart", Risk.R2, "Restart a systemd unit (privileged).",
                  "service:restart", {"unit": {"type": "str", "required": True}},
-                 t_service_restart, 3, lambda a: a.get("unit", ""), v_unit),
+                 t_service_restart, 3, lambda a: a.get("unit", ""), v_unit,
+                 tags=("system", "privileged")),
     ]
+
+
+def default_tools(state_dir: Path) -> list[ToolSpec]:
+    """Full default catalogue: system tools + hitech-store tools.
+
+    Lazy import avoids a module cycle: ``tool_registry`` imports ``ToolSpec``
+    from here while this function asks the registry to compose the catalogue.
+    """
+    from .tool_registry import build_default_registry
+
+    return build_default_registry(state_dir).all()
 
 
 # --------------------------------------------------------------------------- broker
 class Broker:
     def __init__(self, state_dir: Path | str, tools: list[ToolSpec] | None = None,
-                 approval_ttl_s: int = 300) -> None:
+                 approval_ttl_s: int = 300, policy: Any | None = None) -> None:
         self.state_dir = Path(state_dir)
+        self.policy = policy
         self.audit = AuditLog(self.state_dir / "audit" / "genio-audit.jsonl")
         self.approvals = ApprovalStore(ttl_s=approval_ttl_s)
         self._tools: dict[str, ToolSpec] = {t.id: t for t in (tools or default_tools(self.state_dir))}
@@ -511,6 +479,14 @@ class Broker:
             self._audit_safe(subject, tool, args_hash, "rate_limited", summary)
             return self._deny("rate_limited", f"rate limit {tool.rate_per_min}/min exceeded")
 
+        # 3.5 deterministic policy: capabilities and scope, never model opinion
+        if self.policy is not None:
+            verdict = self.policy.evaluate(tool, subject, session.get("caps") or [], clean)
+            if verdict.decision == "DENY":
+                self._audit_safe(subject, tool, args_hash, "denied",
+                                 f"policy:{verdict.code}: {verdict.reason}")
+                return self._deny(verdict.code, verdict.reason, rule=verdict.rule)
+
         # 4. audit must be writable before any R1/R2 side effect (fail-closed)
         if tool.risk in (Risk.R1, Risk.R2) and not self.audit.ensure_writable():
             return self._deny("audit_unavailable",
@@ -591,6 +567,23 @@ class Broker:
                     "audit_seq": seq}
         return {"ok": True, "decision": "executed", "tool": tool.id,
                 "risk": tool.risk.value, "result": result, "audit_seq": seq}
+
+    def record_denial(self, tool_id: str, args: dict[str, Any], subject: str,
+                      code: str, reason: str) -> int | None:
+        """Audit a denial that happened *before* execution (policy layer)."""
+        tool = self._tools.get(tool_id)
+        if tool is None:
+            return None
+        try:
+            args_hash = caps.hash_args(args or {})
+        except Exception:
+            args_hash = ""
+        try:
+            return self.audit.append(actor=subject, tool=tool.id, risk=tool.risk.value,
+                                     args_hash=args_hash, decision="denied",
+                                     detail=f"policy:{code}: {reason}"[:500])
+        except AuditUnavailable:
+            return None
 
     def _audit_safe(self, actor: str, tool: ToolSpec, args_hash: str,
                     decision: str, detail: str) -> None:

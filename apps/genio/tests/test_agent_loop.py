@@ -238,3 +238,77 @@ def test_history_budget_truncates_old_messages(tmp_path):
     assert 0 < len(short) < 30
     assert short[-1]["content"].startswith("message-29")
     store.close()
+
+
+# --------------------------------------------------------------------------- policy
+def _store_broker(tmp_path, executed):
+    def extract(args):
+        executed.append(dict(args))
+        return {"format": "pdf", "path": args["path"], "text": "hello"}
+
+    return Broker(tmp_path, tools=[
+        ToolSpec("store.extract", Risk.R0, "Extract a document", "store:extract",
+                 {"path": {"type": "str", "required": True}}, extract, 100),
+    ])
+
+
+def test_policy_denies_private_path_before_the_broker(tmp_path):
+    executed: list[dict] = []
+    plans = [{"thought": "read the private file",
+              "action": {"tool": "store.extract", "args": {"path": "private/secret.pdf"}},
+              "final": None}]
+    loop, broker, backend, memory, events, _ = make_loop(
+        tmp_path, plans, broker=_store_broker(tmp_path, executed))
+
+    result = loop.run("read the private file", token(["store:extract"]))
+
+    assert result["status"] == "error"
+    assert result["error"] == "private_store_denied"
+    assert executed == [], "policy must stop the call before any execution"
+    assert len(backend.calls) == 1, "no replanning after a policy denial"
+    policy_events = [e for e in events if e.get("phase") == "policy"]
+    assert policy_events and policy_events[-1]["decision"] == "DENY"
+    assert broker.audit.seq >= 1, "denial is audited"
+    assert memory.history(result["session_id"])[-1]["role"] == "assistant"
+
+
+def test_policy_allows_public_document_and_records_decision(tmp_path):
+    executed: list[dict] = []
+    plans = [
+        {"thought": "read it",
+         "action": {"tool": "store.extract", "args": {"path": "public/manual.pdf"}},
+         "final": None},
+        {"thought": "summarise", "action": None, "final": "The manual is short."},
+    ]
+    loop, broker, backend, memory, events, _ = make_loop(
+        tmp_path, plans, broker=_store_broker(tmp_path, executed))
+
+    result = loop.run("summarise the manual", token(["store:extract"]))
+
+    assert result["status"] == "completed"
+    assert executed == [{"path": "public/manual.pdf"}]
+    assert [e["decision"] for e in events if e.get("phase") == "policy"] == ["ALLOW"]
+
+
+def test_invalid_session_token_stops_before_planning(tmp_path):
+    plans = [{"thought": "never", "action": None, "final": "should not happen"}]
+    loop, broker, backend, memory, events, _ = make_loop(tmp_path, plans)
+
+    result = loop.run("hello", "g1.bogus.signature")
+
+    assert result["status"] == "error"
+    assert result["error"] == "tokeninvalid"
+    assert backend.calls == [], "no model call without a verified session"
+
+
+def test_approval_payload_carries_the_policy_verdict(tmp_path):
+    plans = [{"thought": "restart it",
+              "action": {"tool": "t.r2", "args": {"target": "cron"}}, "final": None}]
+    loop, broker, backend, memory, events, _ = make_loop(tmp_path, plans)
+
+    paused = loop.run("restart cron", token())
+
+    assert paused["status"] == "awaiting_approval"
+    verdict = paused["approval"]["policy"]
+    assert verdict["decision"] == "REQUIRE_CONFIRMATION"
+    assert verdict["rule"] == "P7_r2_confirmation"

@@ -15,18 +15,22 @@ def _session() -> str:
     return res.json()["token"]
 
 
-def test_health_reports_phase3():
+def test_health_reports_phase5():
     body = client.get("/health").json()
     assert body["status"] == "ok"
-    assert body["phase"] == 3
-    assert body["broker"]["tools"] >= 7
+    assert body["phase"] == 5
+    assert body["broker"]["tools"] >= 9
     assert body["mind"]["max_steps"] >= 1
+    assert body["registry"]["count"] >= 9
+    assert "store:extract" in body["registry"]["capabilities"]
+    assert "store.delete" in body["policy"]["deny_tools"]
 
 
 def test_tools_catalogue():
     body = client.get("/tools").json()
     ids = {tool["id"] for tool in body["tools"]}
-    assert {"telemetry.snapshot", "file.write", "service.restart"} <= ids
+    assert {"telemetry.snapshot", "file.write", "service.restart",
+            "store.list", "store.extract", "store.media_info", "store.mkdir"} <= ids
 
 
 def test_invoke_without_token_is_401():
@@ -159,3 +163,45 @@ def test_mind_status_endpoint():
 def test_memory_sessions_endpoint():
     body = client.get("/memory/sessions").json()
     assert isinstance(body["sessions"], list)
+
+
+# --------------------------------------------------------------------------- policy API
+def test_policy_snapshot_lists_rules_and_matrix():
+    body = client.get("/policy").json()
+    assert body["rules"] and body["matrix"]
+    assert body["private_capability"] == "store:private"
+    decisions = {row["tool"]: row["decision"] for row in body["matrix"]}
+    assert decisions["store.list"] == "ALLOW"
+    assert decisions["store.mkdir"] == "REQUIRE_CONFIRMATION"
+    assert decisions["service.restart"] == "REQUIRE_CONFIRMATION"
+
+
+def test_policy_evaluate_denies_private_path_without_private_cap():
+    body = client.post("/policy/evaluate", json={
+        "tool": "store.extract", "caps": ["store:extract"],
+        "args": {"path": "private/secret.pdf"},
+    }).json()
+    assert body["decision"] == "DENY"
+    assert body["code"] == "private_store_denied"
+    assert body["found"] is True
+
+
+def test_policy_evaluate_allows_public_path():
+    body = client.post("/policy/evaluate", json={
+        "tool": "store.extract", "caps": ["store:extract"],
+        "args": {"path": "public/manual.pdf"},
+    }).json()
+    assert body["decision"] == "ALLOW"
+
+
+def test_policy_evaluate_unknown_tool():
+    body = client.post("/policy/evaluate", json={"tool": "shell.exec"}).json()
+    assert body["decision"] == "DENY"
+    assert body["code"] == "unknown_tool"
+    assert body["found"] is False
+
+
+def test_portal_status_is_honest_about_offline_store():
+    body = client.get("/portal/status").json()
+    assert "base_url" in body and "auth_mode" in body
+    assert body["ok"] in (True, False)

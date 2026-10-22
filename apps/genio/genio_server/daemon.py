@@ -44,12 +44,14 @@ try:  # package mode (uvicorn genio_server.daemon:app)
     from .core import agent_loop as agent_mod
     from .core import broker as broker_mod
     from .core import caps, memory as memory_mod, model_router, system_monitor
+    from .core import policy_engine, store_client, tool_registry
 except ImportError:  # script mode (cd genio_server && uvicorn daemon:app)
     from core import agent_loop as agent_mod  # type: ignore[no-redef]
     from core import broker as broker_mod  # type: ignore[no-redef]
     from core import caps, memory as memory_mod, model_router, system_monitor  # type: ignore[no-redef]
+    from core import policy_engine, store_client, tool_registry  # type: ignore[no-redef]
 
-VERSION = "0.3.0-phase3"
+VERSION = "0.4.0-phase4-5"
 HOST = os.getenv("GENIO_HOST", "127.0.0.1")
 PORT = int(os.getenv("GENIO_PORT", "8765"))
 TICK_SECONDS = float(os.getenv("GENIO_TICK_SECONDS", "5"))
@@ -61,19 +63,23 @@ SESSION_TTL_S = int(os.getenv("GENIO_SESSION_TTL", str(12 * 3600)))
 # Caps a local client may obtain. R2 execution still needs a human approval:
 # the capability only authorises the *attempt*.
 DEFAULT_SESSION_CAPS = [
-    "telemetry:read", "service:read", "store:read", "fs:write", "service:restart",
+    "telemetry:read", "service:read", "fs:write", "service:restart",
+    "store:read", "store:extract", "store:write", "media:read",
 ]
 
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [genio] %(levelname)s: %(message)s")
 log = logging.getLogger("genio.daemon")
 
-BROKER = broker_mod.build_default_broker(STATE_DIR)
+STORE = store_client.StoreClient.from_env()
+POLICY = policy_engine.PolicyEngine()
+REGISTRY = tool_registry.build_default_registry(STATE_DIR, store=STORE)
+BROKER = broker_mod.Broker(STATE_DIR, tools=REGISTRY.all(), policy=POLICY)
 MEMORY = memory_mod.MemoryStore(STATE_DIR / "memory")
 ROUTER = model_router.ModelRouter.from_env()
 # `publish` is defined below; resolve it lazily so module import order stays flat.
 AGENT = agent_mod.AgentLoop(BROKER, ROUTER, MEMORY,
                             publish=lambda event: publish(event),
-                            telemetry=system_monitor.snapshot)
+                            telemetry=system_monitor.snapshot, policy=POLICY)
 AGENT_SESSION_TTL_S = int(os.getenv("GENIO_AGENT_SESSION_TTL", "900"))
 
 STATE: dict[str, Any] = {
@@ -186,7 +192,7 @@ class ApproveBody(BaseModel):
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
-        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 3,
+        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 5,
         "uptime_s": round(time.time() - STATE["started_at"], 1),
         "agent": {
             "loop_running": STATE["loop_running"], "ticks": STATE["ticks"],
@@ -200,6 +206,14 @@ async def health() -> dict[str, Any]:
             "pending_approvals": len(BROKER.approvals.list()),
             "state_dir": str(STATE_DIR),
         },
+        "registry": REGISTRY.summary(),
+        "policy": {
+            "rules": len(POLICY.rules),
+            "deny_tools": sorted(POLICY.deny_tools),
+            "private_capability": policy_engine.PRIVATE_CAP,
+            "write_roots": list(policy_engine.WRITE_ROOTS),
+        },
+        "portal": STORE.describe(),
         "caps": {"key_source": caps.key_source()},
         "mind": {
             "max_steps": AGENT.max_steps,
@@ -381,6 +395,43 @@ async def memory_sessions(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any
 @app.get("/memory/{session_id}")
 async def memory_session(session_id: str) -> dict[str, Any]:
     return MEMORY.export(session_id)
+
+
+# --------------------------------------------------------------------------- policy
+class PolicyQuery(BaseModel):
+    tool: str = Field(..., max_length=80)
+    caps: list[str] | None = None
+    subject: str = Field("local", max_length=64)
+    args: dict[str, Any] | None = None
+
+
+@app.get("/policy")
+async def policy_snapshot() -> dict[str, Any]:
+    """Rules + the decision matrix for the default agent capabilities."""
+    tools = REGISTRY.all()
+    return {
+        **POLICY.rules_snapshot(),
+        "matrix": POLICY.matrix(tools, "agent", DEFAULT_SESSION_CAPS),
+    }
+
+
+@app.post("/policy/evaluate")
+async def policy_evaluate(body: PolicyQuery) -> dict[str, Any]:
+    """Stateless what-if evaluation (never executes anything)."""
+    spec = REGISTRY.get(body.tool)
+    caps = DEFAULT_SESSION_CAPS if body.caps is None else body.caps
+    verdict = POLICY.evaluate(spec, body.subject, caps, body.args or {})
+    return {**verdict.as_dict(), "found": spec is not None,
+            "capabilities": list(caps)}
+
+
+@app.get("/portal/status")
+async def portal_status() -> dict[str, Any]:
+    try:
+        return {"ok": True, **await asyncio.to_thread(STORE.health)}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
+                **STORE.describe()}
 
 
 @app.get("/agent/events")

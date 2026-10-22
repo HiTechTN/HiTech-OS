@@ -26,11 +26,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 try:  # package mode
-    from . import memory as memory_mod, model_router, system_monitor
+    from . import caps, memory as memory_mod, model_router, system_monitor
     from .broker import Broker
+    from .policy_engine import PolicyEngine
 except ImportError:  # script mode
-    from core import memory as memory_mod, model_router, system_monitor  # type: ignore
+    from core import caps, memory as memory_mod, model_router, system_monitor  # type: ignore
     from core.broker import Broker  # type: ignore
+    from core.policy_engine import PolicyEngine  # type: ignore
 
 log = logging.getLogger("genio.agent")
 
@@ -46,8 +48,11 @@ Reply with exactly ONE JSON object:
 Rules:
 - Pick at most one tool per turn. The system executes it and shows you the observation.
 - Use only tool ids from the catalogue. Never invent ids or arguments.
+- hitech-store paths are RELATIVE and start with public/, private/ or agents/
+  (example: "public/report.pdf"). Never use absolute paths or /hitech-store.
 - Prefer observation over assumption. Never claim an action you did not call.
 - When you have enough information, set action to null and write the answer in "final".
+- Never repeat the exact same tool call: its observation is already in your context.
 - R2 tools are privileged: the system pauses for a human approval; that is normal.
 - Be concise. The operator sees your "thought" in the event stream."""
 
@@ -80,10 +85,12 @@ class AgentLoop:
                  memory: memory_mod.MemoryStore,
                  publish: Callable[[dict[str, Any]], None] | None = None,
                  telemetry: Callable[..., dict[str, Any]] | None = None,
-                 max_steps: int = DEFAULT_MAX_STEPS, history_limit: int = 16) -> None:
+                 max_steps: int = DEFAULT_MAX_STEPS, history_limit: int = 16,
+                 policy: PolicyEngine | None = None) -> None:
         self.broker = broker
         self.router = router
         self.memory = memory
+        self.policy = policy or PolicyEngine()
         self.publish = publish or (lambda event: None)
         self.telemetry = telemetry or system_monitor.snapshot
         self.max_steps = max(1, int(max_steps))
@@ -100,10 +107,17 @@ class AgentLoop:
 
         self._emit("perceive", session_id=session_id, step=0,
                    detail="collecting system state")
+        session = self._verify_session(session_token)
+        if session is None:
+            answer = "Invalid or expired session token."
+            self.memory.append_message(session_id, "assistant", answer)
+            return self._result("error", answer, session_id, [], error="tokeninvalid")
+        caps_set, subject = session
         brief = self._state_brief(self._snapshot())
         self._emit("thought", session_id=session_id, step=0,
-                   detail=f"session {session_id} · max_steps={self.max_steps}")
-        return self._drive(session_id, session_token, brief, [])
+                   detail=f"session {session_id} · subject={subject} "
+                          f"· caps={len(caps_set)} · max_steps={self.max_steps}")
+        return self._drive(session_id, session_token, brief, [], caps_set, subject)
 
     def resume(self, session_id: str, approval_token: str,
                session_token: str) -> dict[str, Any]:
@@ -114,6 +128,22 @@ class AgentLoop:
                                 session_id, [], error="no_pending_action")
         tool, args = pending["tool"], pending["args"] or {}
         step_no = int(pending.get("step") or 1)
+        session = self._verify_session(session_token)
+        if session is None:
+            self.memory.clear_pending(session_id)
+            return self._result("error", "Invalid or expired session token.",
+                                session_id, [], error="tokeninvalid")
+        caps_set, subject = session
+        spec = self.broker.get_tool(tool)
+        verdict = self.policy.evaluate(spec, subject, caps_set, args)
+        if verdict.decision == "DENY":
+            self.broker.record_denial(tool, args, subject, verdict.code, verdict.reason)
+            self.memory.clear_pending(session_id)
+            answer = f"Stopped by policy: {verdict.code} — {verdict.reason}"
+            self.memory.append_message(session_id, "assistant", answer)
+            self._emit("error", session_id=session_id, step=step_no,
+                       code=verdict.code, detail=verdict.reason)
+            return self._result("error", answer, session_id, [], error=verdict.code)
         self._emit("act", session_id=session_id, step=step_no, tool=tool, args=args,
                    detail="resuming with human approval")
         result = self.broker.invoke(tool, args, session_token, approval_token)
@@ -140,11 +170,11 @@ class AgentLoop:
         self.memory.append_message(session_id, "tool", self._text(tool, result),
                                    meta={"tool": tool, "decision": decision})
         brief = self._state_brief(self._snapshot())
-        return self._drive(session_id, session_token, brief, [step])
+        return self._drive(session_id, session_token, brief, [step], caps_set, subject)
 
     # ------------------------------------------------------------------ loop
     def _drive(self, session_id: str, session_token: str, brief: str,
-               steps: list[AgentStep]) -> dict[str, Any]:
+               steps: list[AgentStep], caps_set: set[str], subject: str) -> dict[str, Any]:
         degraded = False
         answer: str | None = None
         context = self._context(session_id)
@@ -192,6 +222,34 @@ class AgentLoop:
                            summary=observation["message"])
                 continue
 
+            spec = self.broker.get_tool(tool)
+            verdict = self.policy.evaluate(spec, subject, caps_set, args)
+            self._emit("policy", session_id=session_id, step=step_no, tool=tool,
+                       decision=verdict.decision.value, code=verdict.code,
+                       rule=verdict.rule)
+
+            if verdict.decision == "DENY":
+                self.broker.record_denial(tool, args, subject, verdict.code, verdict.reason)
+                observation = {"code": verdict.code, "message": verdict.reason,
+                               "rule": verdict.rule}
+                steps.append(AgentStep(step_no, thought, tool, args, "denied",
+                                       False, observation))
+                self.memory.record_tool_result(session_id, tool, args, "denied",
+                                                False, observation)
+                self.memory.append_message(
+                    session_id, "tool",
+                    f"{tool}: policy denied ({verdict.code}) {verdict.reason}",
+                    meta={"tool": tool, "decision": "denied", "rule": verdict.rule})
+                self._emit("observation", session_id=session_id, step=step_no,
+                           tool=tool, ok=False, decision="denied",
+                           summary=verdict.reason)
+                answer = f"Stopped by policy: {verdict.code} — {verdict.reason}"
+                self.memory.append_message(session_id, "assistant", answer)
+                self._emit("final", session_id=session_id, answer=answer,
+                           degraded=degraded)
+                return self._result("error", answer, session_id, steps,
+                                    degraded=degraded, error=verdict.code)
+
             self._emit("act", session_id=session_id, step=step_no, tool=tool, args=args)
             result = self.broker.invoke(tool, args, session_token)
             ok = bool(result.get("ok"))
@@ -218,6 +276,7 @@ class AgentLoop:
                     "tool": tool, "args": args, "risk": result.get("risk"),
                     "prompt": result.get("approval_prompt"),
                     "expires_in_s": result.get("expires_in_s"),
+                    "policy": verdict.as_dict(),
                 }
                 self._emit("approval_required", session_id=session_id, step=step_no,
                            **approval)
@@ -331,6 +390,14 @@ class AgentLoop:
                 f"failed={', '.join(failed[:5]) if failed else 'none'}")
 
     # ------------------------------------------------------------------ helpers
+    def _verify_session(self, token: str) -> tuple[set[str], str] | None:
+        try:
+            payload = caps.verify(token, consume=False)
+        except caps.CapError as exc:
+            log.warning("session rejected: %s", exc)
+            return None
+        return set(payload.get("caps") or []), str(payload.get("sub", "unknown"))
+
     def _snapshot(self) -> dict[str, Any]:
         try:
             return self.telemetry()
