@@ -87,8 +87,20 @@ class GenioClient:
     def tools(self) -> list[dict[str, Any]]:
         return self._req("GET", "/tools")[1].get("tools", [])
 
-    def message(self, text: str) -> tuple[int, dict[str, Any]]:
-        return self._req("POST", "/agent/message", {"message": text})
+    def message(self, text: str, session_id: str | None = None) -> tuple[int, dict[str, Any]]:
+        return self._req("POST", "/agent/message",
+                         {"message": text, "session_id": session_id}, timeout=240.0)
+
+    def approve(self, session_id: str, approval_id: str) -> tuple[int, dict[str, Any]]:
+        return self._req("POST", "/agent/approve",
+                         {"session_id": session_id, "approval_id": approval_id},
+                         timeout=240.0)
+
+    def mind(self) -> dict[str, Any]:
+        return self._req("GET", "/mind/status")[1]
+
+    def memory(self, session_id: str) -> dict[str, Any]:
+        return self._req("GET", f"/memory/{session_id}")[1]
 
     def invoke(self, tool: str, args: dict[str, Any],
                approval_token: str | None = None) -> tuple[int, dict[str, Any]]:
@@ -235,17 +247,110 @@ def run_demo(client: GenioClient, auto_yes: bool) -> int:
     return 0 if verify.get("ok") else 1
 
 
-def run_once(client: GenioClient, message: str) -> int:
-    status, data = client.message(message)
-    if status != 200:
+def render_trace(steps: list[dict[str, Any]]) -> None:
+    if not steps:
+        return
+    table = Table(title="agent trace", header_style="bold", show_lines=False)
+    table.add_column("#", width=3, justify="right")
+    table.add_column("tool", style="cyan")
+    table.add_column("decision")
+    table.add_column("observation", max_width=70)
+    for step in steps:
+        decision = step.get("decision") or "—"
+        style = "green" if step.get("ok") else ("yellow" if decision == "approval_required" else "red")
+        table.add_row(str(step.get("step")), step.get("tool") or "—",
+                      Text(decision, style=style), str(step.get("observation"))[:160])
+    console.print(table)
+
+
+def render_agent(data: dict[str, Any], message: str) -> None:
+    if data.get("degraded"):
+        console.print("[yellow]degraded:[/] model unavailable — deterministic planner used")
+    render_trace(data.get("steps") or [])
+    console.print(Panel(data.get("answer", ""), title=f"genio ← {message!r}",
+                        subtitle=f"status={data.get('status')} · steps={data.get('steps_used')}"
+                                 f" · session={data.get('session_id')}",
+                        border_style="cyan" if data.get("status") == "completed" else "yellow"))
+
+
+def run_once(client: GenioClient, message: str, auto_yes: bool = False,
+             session_id: str | None = None) -> int:
+    status, data = client.message(message, session_id)
+    if status not in (200, 500):
         console.print(f"[red]{data}[/]")
         return 1
-    console.print(Panel(data.get("reply", ""), title=f"genio ← {message!r}",
-                        border_style="cyan"))
-    suggestion = data.get("suggestion")
-    if suggestion:
-        console.print(f"[dim]suggested tool: {suggestion['tool']} {suggestion['args']}[/]")
+    render_agent(data, message)
+
+    approval = data.get("approval")
+    if data.get("status") == "awaiting_approval" and approval:
+        console.print(Panel(
+            f"[bold]{approval.get('prompt') or 'Privileged action'}[/]\n\n"
+            f"risk: [bold red]{approval.get('risk')}[/] · tool: {approval.get('tool')}\n"
+            f"args: {json.dumps(approval.get('args'), ensure_ascii=False)}\n"
+            f"approval id: {approval.get('approval_id')} "
+            f"· expires in {approval.get('expires_in_s')}s",
+            title="waiting for human", border_style="yellow"))
+        approved = True if auto_yes else Confirm.ask("Approve and continue?", default=False)
+        if not approved:
+            console.print("[dim]denied — the loop stays paused; nothing executed[/]")
+            return 0
+        status, resumed = client.approve(data["session_id"], approval["approval_id"])
+        if status not in (200, 500):
+            console.print(f"[red]approval failed:[/] {resumed}")
+            return 1
+        render_agent(resumed, message)
+        return 0 if resumed.get("status") == "completed" else 1
+
+    return 0 if data.get("status") in ("completed", "max_steps") else 1
+
+
+def tail_events(client: GenioClient, seconds: float = 0) -> int:
+    """Print the SSE stream (agent thinking + tool results)."""
+    import time as _time
+
+    deadline = _time.time() + seconds if seconds else None
+    req = urllib.request.Request(client.base + "/agent/events")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            console.print("[dim]streaming /agent/events — Ctrl-C to stop[/]")
+            for raw in resp:
+                if deadline and _time.time() > deadline:
+                    break
+                line = raw.decode(errors="replace").rstrip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    event = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+                kind = event.get("type", "?")
+                if kind == "agent":
+                    phase = event.get("phase")
+                    colour = {"perceive": "blue", "plan": "cyan", "act": "yellow",
+                              "observation": "magenta", "reflect": "blue",
+                              "final": "green", "approval_required": "bold yellow",
+                              "error": "red"}.get(phase, "white")
+                    detail = (event.get("thought") or event.get("summary")
+                              or event.get("detail") or event.get("answer") or "")
+                    extra = ""
+                    if event.get("tool"):
+                        extra = f" {event['tool']} {json.dumps(event.get('args') or {})}"
+                    console.print(f"[{colour}]{phase:<18}[/] step={event.get('step')}"
+                                  f"{extra} {str(detail)[:160]}")
+                elif kind == "tick":
+                    console.print(f"[dim]tick cpu={event.get('cpu_percent')}% "
+                                  f"mem={event.get('mem_percent')}%[/]")
+                else:
+                    console.print(f"[dim]{kind}: {json.dumps(event)[:160]}[/]")
+    except KeyboardInterrupt:
+        return 0
+    except (urllib.error.URLError, TimeoutError) as exc:
+        console.print(f"[red]event stream failed:[/] {exc}")
+        return 1
     return 0
+
+
+AUTO_YES = False
 
 
 def interactive(client: GenioClient) -> int:
@@ -286,7 +391,7 @@ def interactive(client: GenioClient) -> int:
                 continue
             invoke_with_approval(client, tool, args)
         elif cmd == "ask":
-            run_once(client, rest)
+            run_once(client, rest, auto_yes=AUTO_YES)
         else:
             run_once(client, line)
     return 0
@@ -297,16 +402,24 @@ def main() -> int:
     parser.add_argument("--url", default="http://127.0.0.1:8765")
     parser.add_argument("--once", metavar="MESSAGE", help="send one message and exit")
     parser.add_argument("--demo", action="store_true", help="scripted end-to-end demo")
-    parser.add_argument("--yes", action="store_true", help="auto-approve R2 (demo only)")
+    parser.add_argument("--yes", action="store_true", help="auto-approve privileged actions")
+    parser.add_argument("--session", help="reuse an existing session id")
+    parser.add_argument("--events", action="store_true", help="tail the SSE event stream")
+    parser.add_argument("--events-seconds", type=float, default=0,
+                        help="stop the event stream after N seconds (0 = forever)")
     args = parser.parse_args()
 
+    global AUTO_YES
+    AUTO_YES = args.yes
     client = GenioClient(args.url)
     if not client.connect():
         return 2
+    if args.events:
+        return tail_events(client, args.events_seconds)
     if args.demo:
         return run_demo(client, args.yes)
     if args.once:
-        return run_once(client, args.once)
+        return run_once(client, args.once, auto_yes=args.yes, session_id=args.session)
     return interactive(client)
 
 

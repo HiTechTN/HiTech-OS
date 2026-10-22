@@ -41,13 +41,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 try:  # package mode (uvicorn genio_server.daemon:app)
+    from .core import agent_loop as agent_mod
     from .core import broker as broker_mod
-    from .core import caps, system_monitor
+    from .core import caps, memory as memory_mod, model_router, system_monitor
 except ImportError:  # script mode (cd genio_server && uvicorn daemon:app)
+    from core import agent_loop as agent_mod  # type: ignore[no-redef]
     from core import broker as broker_mod  # type: ignore[no-redef]
-    from core import caps, system_monitor  # type: ignore[no-redef]
+    from core import caps, memory as memory_mod, model_router, system_monitor  # type: ignore[no-redef]
 
-VERSION = "0.2.0-phase2"
+VERSION = "0.3.0-phase3"
 HOST = os.getenv("GENIO_HOST", "127.0.0.1")
 PORT = int(os.getenv("GENIO_PORT", "8765"))
 TICK_SECONDS = float(os.getenv("GENIO_TICK_SECONDS", "5"))
@@ -66,6 +68,13 @@ logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [genio] %(levelname)s: 
 log = logging.getLogger("genio.daemon")
 
 BROKER = broker_mod.build_default_broker(STATE_DIR)
+MEMORY = memory_mod.MemoryStore(STATE_DIR / "memory")
+ROUTER = model_router.ModelRouter.from_env()
+# `publish` is defined below; resolve it lazily so module import order stays flat.
+AGENT = agent_mod.AgentLoop(BROKER, ROUTER, MEMORY,
+                            publish=lambda event: publish(event),
+                            telemetry=system_monitor.snapshot)
+AGENT_SESSION_TTL_S = int(os.getenv("GENIO_AGENT_SESSION_TTL", "900"))
 
 STATE: dict[str, Any] = {
     "started_at": time.time(), "ticks": 0, "errors": 0, "last_tick": None,
@@ -162,14 +171,22 @@ class GrantBody(BaseModel):
 
 
 class MessageBody(BaseModel):
-    message: str = Field(..., min_length=1, max_length=4000)
+    message: str = Field("", max_length=4000)
+    session_id: str | None = Field(None, max_length=80)
+    approval_token: str | None = None
+
+
+class ApproveBody(BaseModel):
+    session_id: str = Field(..., max_length=80)
+    approval_id: str = Field(..., max_length=80)
+    approver: str = Field("local-human", max_length=64)
 
 
 # --------------------------------------------------------------------------- health
 @app.get("/health")
 async def health() -> dict[str, Any]:
     return {
-        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 2,
+        "status": "ok", "service": "genio-daemon", "version": VERSION, "phase": 3,
         "uptime_s": round(time.time() - STATE["started_at"], 1),
         "agent": {
             "loop_running": STATE["loop_running"], "ticks": STATE["ticks"],
@@ -184,6 +201,12 @@ async def health() -> dict[str, Any]:
             "state_dir": str(STATE_DIR),
         },
         "caps": {"key_source": caps.key_source()},
+        "mind": {
+            "max_steps": AGENT.max_steps,
+            "router": ROUTER.status(),
+            "memory": str(MEMORY.path),
+            "sessions": len(MEMORY.sessions(50)),
+        },
     }
 
 
@@ -292,58 +315,72 @@ async def audit_tail(n: int = Query(20, ge=1, le=500)) -> dict[str, Any]:
     return {"count": len(records), "records": records}
 
 
-# --------------------------------------------------------------------------- agent
-def _route_message(message: str) -> dict[str, Any]:
-    """Deterministic Phase 2 router. The LLM planner lands in Phase 3.
+# --------------------------------------------------------------------------- mind
+LOOPBACK = {"127.0.0.1", "::1", "localhost", "testclient"}
 
-    It never executes a tool: it answers or *suggests* a tool call, which the
-    client must then invoke through the broker (agent proposes, broker disposes).
-    """
-    text = message.strip()
-    low = text.lower()
-    snap = STATE["last_snapshot"] or {}
-    cpu = (snap.get("cpu") or {}).get("percent")
-    mem = (snap.get("memory") or {}).get("percent")
-    svc = (snap.get("services") or {}).get("running_count")
-    failed = (snap.get("services") or {}).get("failed_units") or []
 
-    if low in ("help", "/help", "?"):
-        return {"reply": "Commands: status · services · tools · audit · store <path> · "
-                         "or invoke a tool with /call. Say 'status' for a snapshot."}
-    if any(k in low for k in ("status", "état", "etat", "santé", "health")):
-        return {"reply": f"System: CPU {cpu}% · RAM {mem}% · {svc} services running"
-                         + (f" · FAILED: {', '.join(failed[:5])}" if failed else " · no failed units")
-                         + f" · loop ticks {STATE['ticks']} (errors {STATE['errors']}).",
-                "suggestion": {"tool": "telemetry.snapshot", "args": {}}}
-    if "service" in low:
-        return {"reply": "Use the services.list tool (R0) for the full inventory; "
-                         "restarting a unit is R2 and needs your explicit approval.",
-                "suggestion": {"tool": "services.list", "args": {}}}
-    if "tool" in low:
-        return {"reply": f"{len(BROKER.tools())} tools registered. R0 auto, R1 auto+audited, "
-                         "R2 requires a signed approval token.",
-                "suggestion": None}
-    if "audit" in low:
-        chain = BROKER.audit.verify_chain()
-        return {"reply": f"Audit chain: {'OK' if chain['ok'] else 'BROKEN'} · "
-                         f"{chain.get('records', 0)} records · seq {BROKER.audit.seq}.",
-                "suggestion": None}
-    if low.startswith("store "):
-        path = text[6:].strip()
-        return {"reply": f"Document extraction for {path!r} is R0; invoking store.extract.",
-                "suggestion": {"tool": "store.extract", "args": {"path": path}}}
-    return {"reply": "Phase 2 router active (no LLM yet). Try: status · services · tools · "
-                     "audit · store <path>. Privileged actions need approval.",
-            "suggestion": None}
+def _is_loopback(request: Request) -> bool:
+    host = (request.client.host if request.client else "") or ""
+    return host in LOOPBACK
+
+
+def _agent_session_token() -> str:
+    return caps.issue("agent", DEFAULT_SESSION_CAPS, ttl_s=AGENT_SESSION_TTL_S,
+                      kind="session", reusable=True)
 
 
 @app.post("/agent/message")
-async def agent_message(body: MessageBody) -> dict[str, Any]:
-    result = _route_message(body.message)
-    publish({"type": "message", "message": body.message[:200],
-             "reply": result["reply"][:300]})
-    log.info("agent message handled (%d chars)", len(body.message))
-    return {"ok": True, "ts": _iso(), **result}
+async def agent_message(body: MessageBody) -> JSONResponse:
+    """Run the ReAct loop. The model may only propose broker calls."""
+    token = _agent_session_token()
+    if body.approval_token:
+        if not body.session_id:
+            raise HTTPException(status_code=400, detail="session_id required with approval_token")
+        result = await asyncio.to_thread(
+            AGENT.resume, body.session_id, body.approval_token, token)
+    else:
+        if not body.message.strip():
+            raise HTTPException(status_code=400, detail="message required")
+        result = await asyncio.to_thread(
+            AGENT.run, body.message, token, body.session_id)
+    log.info("agent %s session=%s steps=%s degraded=%s", result["status"],
+             result["session_id"], result["steps_used"], result["degraded"])
+    return JSONResponse(result, status_code=500 if result["status"] == "error" else 200)
+
+
+@app.post("/agent/approve")
+async def agent_approve(body: ApproveBody, request: Request) -> JSONResponse:
+    """Human decision on a paused R2 action, then resume the loop."""
+    if not _is_loopback(request):
+        raise HTTPException(status_code=403, detail="approval is loopback-only")
+    try:
+        approval_token = BROKER.approvals.grant(body.approval_id, body.approver)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    publish({"type": "approval", "approval_id": body.approval_id,
+             "approver": body.approver, "session_id": body.session_id})
+    token = _agent_session_token()
+    result = await asyncio.to_thread(
+        AGENT.resume, body.session_id, approval_token, token)
+    log.warning("agent resumed after approval %s → %s", body.approval_id, result["status"])
+    return JSONResponse(result, status_code=500 if result["status"] == "error" else 200)
+
+
+@app.get("/mind/status")
+async def mind_status() -> dict[str, Any]:
+    return {"router": await asyncio.to_thread(ROUTER.health),
+            "max_steps": AGENT.max_steps,
+            "memory": {"path": str(MEMORY.path), "sessions": len(MEMORY.sessions(50))}}
+
+
+@app.get("/memory/sessions")
+async def memory_sessions(limit: int = Query(20, ge=1, le=100)) -> dict[str, Any]:
+    return {"sessions": MEMORY.sessions(limit)}
+
+
+@app.get("/memory/{session_id}")
+async def memory_session(session_id: str) -> dict[str, Any]:
+    return MEMORY.export(session_id)
 
 
 @app.get("/agent/events")
