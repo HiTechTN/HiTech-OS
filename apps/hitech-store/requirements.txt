@@ -1,0 +1,14 @@
+# HiTech-OS / hitech-store — dépendances Python (FastAPI + extraction)
+# Utilisé par pip/uv pour un venv local ; la derivation Nix (default.nix)
+# référence les équivalents nixpkgs (python3Packages.*).
+fastapi
+uvicorn[standard]
+python-dotenv
+python-jose[cryptography]
+python-multipart
+jinja2
+# Extraction texte côté serveur (preview / recherche)
+pypdf
+python-docx
+openpyxl
+python-pptx

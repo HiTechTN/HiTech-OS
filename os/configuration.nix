@@ -12,6 +12,7 @@
     ./hardware-configuration.nix
     ./common.nix
     ./ecosystem.nix # outillage HiTechTN (AgentOS/app2nix) — audit 22/10/2026
+    ./services/hitech-store.nix # portail universel FastAPI — packagé via app2nix 22/10/2026
   ];
 
   # --- Boot (spécifique disque, sans objet sur une ISO live) ---
