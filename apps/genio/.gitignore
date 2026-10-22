@@ -1,0 +1,7 @@
+# Genio local runtime
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+.genio/
