@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jose import jwt, JWTError
 from pydantic import BaseModel
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
@@ -50,6 +51,12 @@ SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
 SMTP_USER = os.getenv("SMTP_USER", ADMIN_EMAIL)
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+# DEV fallback: if SMTP is unreachable, keep the OTP valid and write the PIN to
+# the local service log (journal/console) instead of returning a 500. This makes
+# the lab testable without a mail relay. MUST be 0 in production:
+#   DEV_OTP_FALLBACK=0  →  hard 500 on SMTP failure, PIN cleared (no leak).
+DEV_OTP_FALLBACK = os.getenv("DEV_OTP_FALLBACK", "1").strip().lower() not in ("0", "false", "no", "off")
 
 OTP_TTL_MIN = 10
 SESSION_HOURS = 12
@@ -112,6 +119,12 @@ app.add_middleware(
     allow_origins=["https://client.hitech.tn", "https://lab.hitech.tn",
                      "capacitor://localhost", "http://localhost"],
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# Trust the reverse proxy (Traefik/Nginx) so request.url.scheme reflects the
+# real client scheme via X-Forwarded-Proto. Without this, TLS terminated
+# upstream leaves the app thinking it is on plain HTTP, which breaks the
+# secure=True session cookie flow (F3 in GEMINI_EYES_REPORT).
+# Keep the proxy network trusted-only in production (e.g. ["127.0.0.1"]).
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 # OTP state is shared across uvicorn workers via a locked runtime file
 # (in-memory dicts desynchronize with --workers > 1).
 OTP_STATE_FILE = BASE_DIR / ".otp_state.json"
@@ -236,6 +249,29 @@ Voici ton code PIN temporaire pour administrer HiTech Drive (lab.hitech.tn/store
         server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         server.send_message(msg)
+
+
+def deliver_pin_or_fallback(pin: str) -> bool:
+    """Email the PIN; on SMTP failure fall back to a local DEV log line.
+
+    Returns True when the email was sent, False when the dev fallback was used.
+    The OTP state is deliberately *not* cleared on fallback so the logged PIN
+    stays valid for OTP_TTL_MIN minutes. With DEV_OTP_FALLBACK=0 the previous
+    hard-failure behaviour is restored (500 + PIN cleared, no leak).
+    """
+    try:
+        send_pin_email(ADMIN_EMAIL, pin)
+        return True
+    except Exception as e:
+        if not DEV_OTP_FALLBACK:
+            clear_otp()
+            log.error(f"SMTP send failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Erreur d'envoi SMTP: {str(e)}")
+        log.warning(f"SMTP unreachable ({e}) — DEV OTP fallback active "
+                    f"(PIN valid {OTP_TTL_MIN} min, logged locally only; set "
+                    f"DEV_OTP_FALLBACK=0 in production).")
+        log.warning(f"SMTP failed. Fallback DEV PIN: {pin}")
+        return False
 
 
 @contextmanager
@@ -472,14 +508,13 @@ class VerifyBody(BaseModel):
 async def quick_otp():
     """1-click OTP: no email field needed, always targets the admin address."""
     pin = issue_otp()
-    try:
-        send_pin_email(ADMIN_EMAIL, pin)
-    except Exception as e:
-        clear_otp()
-        log.error(f"SMTP send failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur d'envoi SMTP: {str(e)}")
+    emailed = deliver_pin_or_fallback(pin)
+    if not emailed:
+        return {"ok": True, "expires_in_s": OTP_TTL_MIN * 60,
+                "delivery": "dev_log_fallback",
+                "message": "SMTP indisponible : code PIN de secours écrit dans les logs du service (mode DEV)."}
     log.info("Quick-OTP dispatched to admin email")
-    return {"ok": True, "expires_in_s": OTP_TTL_MIN * 60}
+    return {"ok": True, "expires_in_s": OTP_TTL_MIN * 60, "delivery": "email"}
 
 
 @app.post("/api/auth/verify-otp")
@@ -716,7 +751,9 @@ def _extract_pdf(path: Path):
         txt = reader.pages[i].extract_text() or ""
         if len(txt) > 20000:
             txt = txt[:20000] + " […]"
-        parts.append(f"<h4>Page {i + 1}</h4><pre>{esc_html(txt)}</pre>")
+        # dir="auto" lets the browser bidi-resolve each block (Arabic RTL vs
+        # Latin LTR) instead of forcing the inherited page direction (F5).
+        parts.append(f'<h4>Page {i + 1}</h4><pre dir="auto">{esc_html(txt)}</pre>')
         chars += len(txt)
         if chars >= EXTRACT_MAX_CHARS:
             break
@@ -1446,12 +1483,9 @@ async def request_otp(email: str = Form(...)):
         log.warning("OTP refused for unauthorized email attempt")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès refusé.")
     pin = issue_otp()
-    try:
-        send_pin_email(ADMIN_EMAIL, pin)
-    except Exception as e:
-        clear_otp()
-        log.error(f"SMTP send failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Erreur d'envoi SMTP: {str(e)}")
+    emailed = deliver_pin_or_fallback(pin)
+    if not emailed:
+        return HTMLResponse("<script>alert('SMTP indisponible — code PIN de secours écrit dans les logs du service (mode DEV).'); window.location.href='/store/admin';</script>")
     log.info("OTP PIN dispatched to admin email")
     return HTMLResponse("<script>alert('Code PIN transmis a ton adresse email.'); window.location.href='/store/admin';</script>")
 
