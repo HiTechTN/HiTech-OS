@@ -42,6 +42,11 @@ in
     "d /data 0755 root root -"
     "d ${stateDir} 0755 hitech-store hitech-store -"
     "d ${stateDir}/storage 0750 hitech-store hitech-store -"
+    # F2 (GEMINI_EYES_REPORT) : seed des conteneurs racine du drive. Sans eux,
+    # le premier `POST /api/drive/mkdir {parent:"public"}` renvoie 404 sur un
+    # volume neuf (upload-batch les créait implicitement, mkdir non).
+    "d ${stateDir}/storage/public 0750 hitech-store hitech-store -"
+    "d ${stateDir}/storage/private 0750 hitech-store hitech-store -"
     "d ${stateDir}/logs 0750 hitech-store hitech-store -"
     "d ${stateDir}/.office_cache 0750 hitech-store hitech-store -"
     # Fichiers d'état pré-créés (les loaders app.py tolèrent un fichier
@@ -54,7 +59,9 @@ in
     # .env placeholder — UNE variable par ligne (pige EnvironmentFile
     # corrigé le 22/10/2026 sur telegraf : plusieurs paires sur une
     # seule ligne forment une seule variable mal déclarée).
-    "f /run/secrets/hitech-store.env 0640 root hitech-store - SECRET_KEY=dev-only-placeholder-change-me\\nSTORAGE_DIR=${stateDir}/storage\\nSMTP_HOST=localhost\\nSMTP_PORT=25\\nSMTP_USER=\\nSMTP_PASSWORD=\\nAGENT_SHARED_SECRET="
+    # DEV_OTP_FALLBACK=1 : SMTP absent → PIN loggé localement + 200 (lab).
+    # Passer à 0 en production (500 dur, PIN effacé, aucune fuite de log).
+    "f /run/secrets/hitech-store.env 0640 root hitech-store - SECRET_KEY=dev-only-placeholder-change-me\\nSTORAGE_DIR=${stateDir}/storage\\nSMTP_HOST=localhost\\nSMTP_PORT=25\\nSMTP_USER=\\nSMTP_PASSWORD=\\nAGENT_SHARED_SECRET=\\nDEV_OTP_FALLBACK=1"
   ];
 
   # --- Service systemd ---
