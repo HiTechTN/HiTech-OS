@@ -11,6 +11,7 @@
   imports = [
     ./hardware-configuration.nix
     ./common.nix
+    ./ecosystem.nix # outillage HiTechTN (AgentOS/app2nix) — audit 22/10/2026
   ];
 
   # --- Boot (spécifique disque, sans objet sur une ISO live) ---
@@ -23,7 +24,9 @@
   # instantanément à la précédente si la nouvelle casse quelque chose.
   system.autoUpgrade = {
     enable = true;
-    flake = "github:HiTechTN/vibe-os#patient-zero";
+    # Ancien nom du dépôt (redirigé 301 par GitHub aujourd'hui, mais
+    # fragile : le flake OTA doit suivre le renommage vibe-os → HiTech-OS).
+    flake = "github:HiTechTN/HiTech-OS#patient-zero";
     dates = "04:00"; # fenêtre de maintenance nocturne, à ajuster par site
     allowReboot = false; # un reboot auto sur un nœud de prod est un choix à valider, pas un défaut
   };
