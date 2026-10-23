@@ -253,27 +253,70 @@ nix-store --generate-binary-cache-key hitechos-cache-1 \
 - Public key: `services.hitech-cache.publicKey`; commit only the public value
   and embed it in the NetInstaller.
 
-### 5.3 Publishing closures
+### 5.3 Publishing closures (implemented)
 
-Harmonia is read-only. The recommended pipeline is:
+Harmonia is read-only, so the pipeline is responsible for building closures,
+copying them to the cache host, and signing them where the private key lives.
 
-1. Build the closure on a trusted builder:
-   `nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel`
-2. Push it to the cache host without exposing the private key to CI:
-   - preferred: a self-hosted runner on the cache host, or
-   - `nix copy --to ssh-ng://cache-host` from a restricted CI key, then sign on
-     the cache host with `nix store sign --key-file /run/secrets/...`.
-3. Verify from a client:
-   ```console
-   nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel \
-     --option substituters "https://cache.hitechos.tn https://cache.nixos.org" \
-     --option trusted-public-keys "hitechos-cache-1:... cache.nixos.org-1:..."
-   ```
-4. Record the cache path and NAR hash in the release notes.
+Two artifacts implement the mechanism:
 
-Do **not** put the signing key in a GitHub Actions secret unless a self-hosted
-runner is impossible; a compromised CI secret lets an attacker sign arbitrary
-store paths.
+- **`scripts/publish-cache.sh`** — builds targets, signs locally when a
+  trusted builder has the key, copies closures to `ssh-ng://<host>`, and
+  optionally has the cache host sign them.
+- **`scripts/sign-cache-closure.sh`** — runs on the cache host; signs a store
+  path and its entire closure.
+- **`.github/workflows/cache-publish.yml`** — `workflow_dispatch` (and
+  `cache-*` tags) job that builds `patient-zero` + `hitech-shell`, pushes them
+  with a restricted SSH key, and lets the cache host sign the closures. The
+  signing key is never a GitHub secret.
+
+Steps on a trusted builder / cache host:
+
+```console
+# patient-zero + hitech-shell by default
+scripts/publish-cache.sh --sign-key /secure/hitechos-cache-1.secret
+
+# CI path: push unsigned, sign on the cache host
+HITECH_CACHE_HOST=cache-publisher@cache.hitechos.tn \
+  scripts/publish-cache.sh
+```
+
+Build-only and dry-run switches (`--no-push`, `--dry-run`) make the script safe
+to run on a developer machine. Every path in a closure is signed
+(`nix path-info --recursive "$out" | nix store sign --stdin`) because Nix verifies each
+substituted path, not only the toplevel.
+
+Cache-host prerequisites (the deploy user receives unsigned paths):
+
+```nix
+users.users.cache-publisher = {
+  isNormalUser = true;
+  openssh.authorizedKeys.keys = [ "<restricted deploy public key>" ];
+};
+
+nix.settings.trusted-users = [ "root" "cache-publisher" ];
+```
+
+The deploy user must be able to read the signing key when the host-side signing
+step runs (run that step as root, or grant the `cache-publisher` group read
+access to `/run/secrets/hitechos-cache-signing-key`). Host-side signing also
+works if Harmonia's `signKeyPaths` on-the-fly signing is later disabled; when
+both are enabled the operation is idempotent.
+
+Verify from a client after publishing:
+
+```console
+nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel \
+  --option substituters "https://cache.hitechos.tn https://cache.nixos.org" \
+  --option trusted-public-keys "hitechos-cache-1:... cache.nixos.org-1:..."
+```
+
+Then record the cache path and NAR hash in the release notes.
+
+Do **not** put the signing key in a GitHub Actions secret: a compromised CI
+secret lets an attacker sign arbitrary store paths. The default pipeline keeps
+signing on the cache host; a self-hosted runner on the cache host is the
+alternative and can call `publish-cache.sh --sign-key` directly.
 
 ### 5.4 Client configuration
 
@@ -440,7 +483,7 @@ services.hitech-cache.enable = true;   # Harmonia cache
 |---|---|---|
 | 8.0 | Architecture + scaffold (this document) | `nix flake check --no-build` passes; NetInstaller and `hitech-shell` build |
 | 8.1 | Cache deployment + key generation | `nix-cache-info` reachable over HTTPS; client trust verified; one signed closure fetched |
-| 8.2 | CI publish job | `patient-zero` closure appears in cache after a `main` build; no private key in CI |
+| 8.2 | Cache publish pipeline (scripts + `cache-publish.yml`) | `patient-zero` closure appears in cache after a manual run; no private key in CI; client verifies signature |
 | 8.3 | NetInstaller VM validation | Full install in QEMU/UEFI from ISO; target boots; services start |
 | 8.4 | Physical-hardware validation | One real install reaches the cache path; rollback path documented |
 | 8.5 | HiTech-Shell compositor v0 | Smithay DRM backend starts on real hardware; layer-shell regions from `layout/mod.rs` |
@@ -457,8 +500,11 @@ services.hitech-cache.enable = true;   # Harmonia cache
   hybrid layout plan and compositor placeholder.
 - `patient-zero` toplevel derivation evaluates successfully with the new
   `hitech-cache` and `hitech-shell` modules (both disabled by default).
+- Cache publish mechanism validated locally: `sign-cache-closure.sh` signed a
+  7-path closure, `nix copy` propagated the signature into a second store, and
+  `nix store verify --recursive --sigs-needed 1` accepted the copy.
 - Not yet done: ISO boot in a VM, Calamares run, cache server runtime test,
-  signing/publishing a real closure, physical install.
+  `ssh-ng` push against the real host, physical install.
 
 ---
 
@@ -514,7 +560,7 @@ hardware.
 | ~1.0 GiB NetInstaller | Missed ~800 MiB product target | Accept, or slim Calamares with a VM-gated override; document decision |
 | Calamares partitioning without `programs.partition-manager` | Partition page may fail | VM test; if it fails, add the smallest required kpmcore/partition tools back |
 | Wired-only live network | Wi-Fi laptops cannot install | Add a firmware/iwlwifi package only if product requires Wi-Fi |
-| Cache private key in CI | Arbitrary signed paths | Self-hosted runner / sign on cache host; never CI secret by default |
+| Cache private key in CI | Arbitrary signed paths | Implemented: CI copies unsigned paths over a restricted SSH key; cache host signs; self-hosted runner can sign directly |
 | `require-sigs` and empty `cachePublicKey` | Unsigned cache rejected or silently unverified | Release builds must set `cachePublicKey` and `allowSourceFallback=false` |
 | Source fallback rebuild time | Installer appears hung | Cache health check and clear log messages already in the script |
 | Rust DE scope | Months of work | Keep compositor/UI seams separate; ship headless compositor first |
@@ -526,7 +572,9 @@ Open decisions needing the owner:
 2. Is Wi-Fi required on the live medium, or is wired Ethernet enough?
 3. Cache hostname/TLS certificate ownership (`cache.hitechos.tn` is a
    placeholder).
-4. Cache publish mechanism: self-hosted runner vs restricted SSH push.
+4. ~~Cache publish mechanism: self-hosted runner vs restricted SSH push.~~
+   Implemented as restricted SSH push with host-side signing; self-hosted
+   runner remains supported via `publish-cache.sh --sign-key`.
 5. Shell UI toolkit: Slint first (as recommended) or Iced first.
 
 ---
@@ -551,6 +599,26 @@ OUT=$(nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage 
 ls -lh "$OUT/iso/"*.iso
 ```
 
+Cache publish mechanism (local end-to-end, no cache host required):
+
+```console
+nix key generate-secret --key-name hitechos-cache-test > /tmp/test.secret
+nix key convert-secret-to-public < /tmp/test.secret > /tmp/test.public
+PATHOUT=$(nix build .#hitech-shell --no-link --print-out-paths)
+scripts/sign-cache-closure.sh -k /tmp/test.secret "$PATHOUT"
+nix copy --to "local?root=/tmp/dummy-store" --no-check-sigs "$PATHOUT"
+nix store verify --recursive --sigs-needed 1 \
+  --option trusted-public-keys "$(cat /tmp/test.public)" "$PATHOUT"
+```
+
+Argument/dry-run checks:
+
+```console
+scripts/publish-cache.sh --help
+scripts/publish-cache.sh --dry-run hitech-shell
+scripts/publish-cache.sh --no-push --sign-key /tmp/test.secret hitech-shell
+```
+
 ---
 
 ## 12. Files added/changed in Phase 8
@@ -564,5 +632,9 @@ ls -lh "$OUT/iso/"*.iso
 - `os/installation.nix` — imports the two new service modules.
 - `apps/hitech-shell/` — Cargo project, Rust source, Nix derivation, Wayland
   session file.
+- `scripts/publish-cache.sh` — build/sign/push orchestration for the cache.
+- `scripts/sign-cache-closure.sh` — host-side closure signer.
+- `.github/workflows/cache-publish.yml` — restricted-SSH publish job with
+  host-side signing (no private key in CI).
 - `docs/ROADMAP.md` — Phase 8 architecture section and status update.
 - `docs/audit/PHASE8-NETINSTALLER-RUST-DE.md` — this document.

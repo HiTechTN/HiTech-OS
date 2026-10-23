@@ -1,0 +1,109 @@
+name: Cache publish
+
+# Build HiTech-OS closures and publish them to the Harmonia binary cache.
+#
+# Security model (docs/audit/PHASE8-NETINSTALLER-RUST-DE.md §5.3):
+#   - The private signing key never leaves the cache host.
+#   - CI copies unsigned closures over a restricted SSH key, then the cache host
+#     signs the closure with /run/secrets/hitechos-cache-signing-key.
+#   - Clients verify with the matching public key embedded in the NetInstaller.
+#
+# Required repository secrets:
+#   HITECH_CACHE_SSH_KEY       private key of a restricted deploy user
+#   HITECH_CACHE_SSH_TARGET    user@cache-host
+#   HITECH_CACHE_KNOWN_HOSTS   pinned known_hosts entry for the cache host
+#   HITECH_CACHE_REMOTE_KEY    key path on the cache host
+#                              (default /run/secrets/hitechos-cache-signing-key)
+#
+# Cache host prerequisites:
+#   - The deploy user is in nix.settings.trusted-users (so `nix copy --to`
+#     may add paths) and owns an authorized_keys entry for HITECH_CACHE_SSH_KEY.
+#   - services.hitech-cache is enabled and serves the signatures.
+#
+# Runs on GitHub-hosted runners by default. A self-hosted runner on the cache
+# host may instead call scripts/publish-cache.sh with --sign-key and skip the
+# SSH/remote-sign steps.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build and publish"
+        required: false
+        default: main
+      targets:
+        description: "Space-separated targets (patient-zero hitech-shell netinstaller)"
+        required: false
+        default: "patient-zero hitech-shell"
+  push:
+    tags:
+      - "cache-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: cachix/install-nix-action@v27
+
+      - name: Configure restricted SSH access to the cache host
+        env:
+          CACHE_SSH_KEY: ${{ secrets.HITECH_CACHE_SSH_KEY }}
+          CACHE_KNOWN_HOSTS: ${{ secrets.HITECH_CACHE_KNOWN_HOSTS }}
+          CACHE_SSH_TARGET: ${{ secrets.HITECH_CACHE_SSH_TARGET }}
+        run: |
+          set -euo pipefail
+          test -n "$CACHE_SSH_KEY" || { echo "HITECH_CACHE_SSH_KEY is not set"; exit 1; }
+          test -n "$CACHE_KNOWN_HOSTS" || { echo "HITECH_CACHE_KNOWN_HOSTS is not set"; exit 1; }
+          test -n "$CACHE_SSH_TARGET" || { echo "HITECH_CACHE_SSH_TARGET is not set"; exit 1; }
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$CACHE_SSH_KEY" > "$HOME/.ssh/id_hitechos_cache"
+          chmod 600 "$HOME/.ssh/id_hitechos_cache"
+          printf '%s\n' "$CACHE_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+          host=${CACHE_SSH_TARGET#*@}
+          user=${CACHE_SSH_TARGET%@*}
+          {
+            echo "Host $host"
+            echo "  User $user"
+            echo "  IdentityFile ~/.ssh/id_hitechos_cache"
+            echo "  IdentitiesOnly yes"
+            echo "  BatchMode yes"
+            echo "  StrictHostKeyChecking yes"
+          } >> "$HOME/.ssh/config"
+          chmod 600 "$HOME/.ssh/config"
+
+      - name: Build and publish closures
+        env:
+          HITECH_CACHE_HOST: ${{ secrets.HITECH_CACHE_SSH_TARGET }}
+          HITECH_CACHE_REMOTE_KEY: ${{ secrets.HITECH_CACHE_REMOTE_KEY }}
+          HITECH_CACHE_TARGETS: ${{ github.event.inputs.targets }}
+        run: |
+          set -euo pipefail
+          # Never put the signing key in CI: --no-sign is intentionally absent,
+          # and publish-cache.sh signs on the host via HITECH_CACHE_REMOTE_KEY.
+          ./scripts/publish-cache.sh
+
+      - name: Summarize published targets
+        if: always()
+        run: |
+          {
+            echo "### Cache publish"
+            echo ""
+            echo "- ref: \`${{ github.event.inputs.ref || github.ref }}\`"
+            echo "- targets: \`${{ github.event.inputs.targets || 'patient-zero hitech-shell' }}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
