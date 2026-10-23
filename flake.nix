@@ -23,10 +23,30 @@
           ];
         };
 
-        # `nix build .#nixosConfigurations` sera défini une fois la
-        # configuration NixOS de base (Phase 1) écrite dans ./os/
+        packages = {
+          default = pkgs.callPackage ./apps/hitech-shell { };
+          hitech-shell = pkgs.callPackage ./apps/hitech-shell { };
+        };
       }
     ) // {
+      # Phase 8 NetInstaller: minimal Calamares ISO that pulls the HiTech-OS
+      # configuration from GitHub and the target closure from the
+      # HiTech-Store/Harmonia binary cache. `self.rev` is baked in as the
+      # default repoRef so release builds are reproducible.
+      nixosConfigurations.netinstaller = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = {
+          hitechosRevision = self.rev or "main";
+        };
+        modules = [
+          # Base installer (channel, iso-image, installer-device) without the
+          # `profiles/minimal.nix` repair toolkit. os/netinstaller.nix trims
+          # the base further and adds only Calamares + networking + git.
+          "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-base.nix"
+          ./os/netinstaller.nix
+        ];
+      };
+
       nixosConfigurations.patient-zero = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         modules = [ ./os/configuration.nix ];

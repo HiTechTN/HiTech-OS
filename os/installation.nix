@@ -11,6 +11,10 @@
 #   - hitech-store    : portail de stockage, actif par défaut
 #   - genio           : daemon IA local + dashboard, actif par défaut
 #   - secrets         : déchiffrement sops optionnel au premier boot
+#   - hitech-cache    : cache binaire Harmonia (serveur désactivé par défaut ;
+#                       client activable, Phase 8 NetInstaller/OTA)
+#   - hitech-shell    : contrat NixOS du DE Wayland Rust (désactivé par défaut,
+#                       Phase 8 scaffold — voir docs/audit/PHASE8-…)
 
 { ... }:
 
@@ -21,5 +25,7 @@
     ./services/hitech-store.nix
     ./services/genio.nix
     ./services/secrets.nix
+    ./services/hitech-cache.nix
+    ./services/hitech-shell.nix
   ];
 }

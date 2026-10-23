@@ -1,0 +1,28 @@
+[package]
+name = "hitech-shell"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "HiTech-Shell — modular Wayland desktop shell for HiTech-OS (scaffold)"
+repository = "https://github.com/HiTechTN/HiTech-OS"
+
+# The Rust shell is intentionally dependency-free in this Phase 8 scaffold so
+# that `nix build .#hitech-shell` works without a vendored cargo registry.
+#
+# Production crates are added here as the compositor and UI layers land:
+#   smithay      — Wayland compositor state machine and protocols
+#   calloop      — event loop used by Smithay
+#   slint        — declarative shell chrome (panels, dock, quick settings)
+#   iced         — alternative UI toolkit for settings/control-centre apps
+#   tracing      — structured logging
+#   serde/toml   — config file parsing (or a hand-written parser first)
+#
+# Keep them behind explicit feature gates so a headless/non-graphical build
+# of the Rust workspace still compiles on CI and on the cache builder.
+[features]
+default = []
+smithay = []
+slint-ui = []
+iced-ui = []
+
+[dependencies]

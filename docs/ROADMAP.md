@@ -46,6 +46,15 @@ C'est cohérent avec la philosophie "sovereign / local-first" : le nœud doit re
 - **Prototypage rapide** : Arduino framework via PlatformIO (flash Web Serial API déjà prévu).
 - **Migration prévue** vers ESP-IDF une fois le firmware stabilisé, pour réduire l'empreinte et gagner en contrôle bas niveau (utile si le nombre de nœuds B2C grandit).
 
+### 1.6 Phase 8 — NetInstaller minimal + HiTech-Shell (Wayland Rust)
+
+Décision : remplacer l'ISO graphique lourde (GNOME + Flatpak + Firefox, ~1,9 Go mesuré) par un **NetInstaller Calamares minimal** qui ne contient que l'installeur, le réseau, `git`/`curl` et la machinerie NixOS, puis télécharge le reste.
+
+- **NetInstaller** (`nixosConfigurations.netinstaller`, `os/netinstaller.nix`) : base `installation-cd-base` élaguée (channel Nixpkgs embarqué désactivé, firmware « tout matériel » désactivé, ZFS/RAID/OpenSSH désactivés, paquets de réparation retirés), kiosque Wayland `cage` + Calamares, `NIX_PATH` pointé sur la révision Nixpkgs exacte via tarball GitHub. Mesure actuelle : **977 Mio** (voir `docs/audit/PHASE8-NETINSTALLER-RUST-DE.md`) ; l'écart avec la cible ~800 Mo vient du runtime Calamares/Qt/KDE et est documenté comme travail de réduction.
+- **Source de configuration** : Calamares clone `github:HiTechTN/HiTech-OS` à la révision `self.rev` gravée dans l'ISO, ajoute l'import `./hitech-os/os/installation.nix` au `configuration.nix` généré, puis `nixos-install` applique le profil HiTech-OS.
+- **Binary cache HiTech-Store** (`services.hitech-cache`) : Harmonia signe les closures cibles ; le NetInstaller et les nœuds patient-zero s'abonnent au cache avec une clé publique `hitechos-cache-1`. `nix-serve` n'est qu'une alternative documentée (pas de signature).
+- **HiTech-Shell** (`apps/hitech-shell`, `services.hitech-shell`) : scaffold Rust Wayland (Smithay pour le compositeur, Slint/Iced pour le chrome) avec option déclarative `services.hitech-shell.layout = "hybrid" | "mac" | "windows"`. Le binaire Phase 8 est volontairement sans dépendance pour que la CI et le cache restent rapides ; l'implémentation réelle est l'itération suivante.
+
 ---
 
 ## 2. Roadmap (phases, pas de durée figée)
@@ -115,7 +124,7 @@ C'est cohérent avec la philosophie "sovereign / local-first" : le nœud doit re
 | 5 — AgentOS | 🔲 Non commencé | Dépend de 2, 3 et 4 étant réellement opérationnels (il faut de la vraie donnée à consommer) |
 | 6 — OTA & immutabilité | ⚙️ Config écrite, non testée | `system.autoUpgrade` déclaré (pull depuis le flake GitHub), rollback = mécanisme natif NixOS (générations de boot) ; jamais testé en conditions réelles (ni un vrai cycle update→rollback) |
 | 7 — Durcissement | ⚙️ Bases posées | SSH root désactivé, sudo avec mot de passe, firewall explicite, auditd activé ; **pas d'audit de sécurité réel effectué** |
-| 8 — Packaging B2C | 🔲 Non commencé | |
+| 8 — Packaging B2C | ⚙️ Architecture + scaffold Phase 8 | NetInstaller Calamares minimal (`nixosConfigurations.netinstaller`, 977 Mio mesuré) qui clone la config GitHub à la révision `self.rev` et substitue la closure cible depuis le cache binaire Harmonia HiTech-Store (`services.hitech-cache`). Scaffold `apps/hitech-shell` (Rust/Wayland, option `services.hitech-shell.layout = hybrid/mac/windows`, binaire sans dépendance) + rapport `docs/audit/PHASE8-NETINSTALLER-RUST-DE.md`. Reste à valider : boot réel de l'ISO, signature/upload effectif du cache, implémentation Smithay/Slint. |
 | 9 — Packaging B2B | 🔲 Non commencé | |
 | 10 — Beta publique | 🔲 Non commencé | |
 
