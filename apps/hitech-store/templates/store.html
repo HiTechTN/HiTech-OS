@@ -54,6 +54,10 @@
         <input id="pinInput" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" placeholder="──────" autocomplete="one-time-code">
         <button class="btn ok" onclick="verifyPin()">Déverrouiller</button>
       </div>
+      <div id="githubLogin" class="hidden">
+        <p class="muted">ou</p>
+        <a class="btn primary wide" href="/auth/github">Se connecter avec GitHub</a>
+      </div>
       <p id="authMsg" class="muted"></p>
     </div>
   </div>

@@ -51,27 +51,56 @@
 { pkgs, ... }:
 
 let
+  # Script exécuté dans le LIVE (dontChroot: true) avec le point de montage
+  # de la cible en argument. On ne dépend plus du git ni du nixos-rebuild
+  # du système installé — c'est précisément ce qui cassait l'installation :
+  # le job tournait chrooté dans une base NixOS fraîche, sans git.
+  hitechosPostInstall = pkgs.writeShellScript "hitechos-post-install" ''
+    set -eu
+
+    target="$1"
+    repo_rel="/etc/nixos/hitech-os"
+    repo="$target$repo_rel"
+    cfg="$target/etc/nixos/configuration.nix"
+    import_rel="./hitech-os/os/installation.nix"
+
+    if [ ! -d "$repo/.git" ]; then
+      ${pkgs.git}/bin/git clone --depth 1 \
+        https://github.com/HiTechTN/HiTech-OS.git "$repo"
+    fi
+
+    # Import RELATIF : nixos-install évalue la config depuis le LIVE avec
+    # NIXOS_CONFIG=/mnt/etc/nixos/configuration.nix, donc un import absolu
+    # /etc/nixos/... pointerait vers le live. Le chemin relatif reste valide
+    # au premier boot dans /etc/nixos.
+    # N'ajouter l'import qu'une seule fois (idempotent en cas de reprise).
+    if ! ${pkgs.gnugrep}/bin/grep -qF "$import_rel" "$cfg"; then
+      ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg"
+    fi
+
+    # nixos-install s'exécute depuis le LIVE, cible montée sous $target :
+    # aucun binaire de la cible n'est requis, et le bootloader est réinstallé
+    # proprement avec le profil HiTech-OS.
+    ${pkgs.nixos-install}/bin/nixos-install \
+      --root "$target" \
+      --no-root-passwd \
+      --option extra-experimental-features 'nix-command flakes'
+  '';
+
   hitechosShellprocessConf = pkgs.writeText "shellprocess-hitechos.conf" ''
     ---
-    # Commandes exécutées CHROOTÉES dans le système fraîchement installé
-    # (dontChroot: false => ROOT == /, voir doc shellprocess de Calamares).
+    # Commandes exécutées dans le LIVE (dontChroot: true). ''${ROOT} est le
+    # point de montage de la cible fourni par Calamares ; le script clone et
+    # reconstruit la cible sans dépendre de son git/nixos-rebuild.
     #
-    # HISTORIQUE : la première version utilisait `nix-shell -p git --run
-    # '...'`, qui échouait en réel (21/09/2026, voir screencast) avec
-    # "experimental Nix feature 'flakes' is disabled" — le chroot hérite
-    # du nix.conf du système LIVE (où flakes n'est pas actif), pas de
-    # celui de common.nix (qui ne s'applique qu'après le premier boot du
-    # système installé). Conséquence grave observée : l'échec de cette
-    # commande faisait sauter TOUS les jobs suivants (mots de passe
-    # utilisateur/root, démontage propre des filesystems).
-    # Fix : git est maintenant préinstallé sur l'ISO (iso.nix), donc plus
-    # besoin de nix-shell ici ; et nixos-rebuild reçoit explicitement le
-    # flag flakes au cas où (défense en profondeur).
-    dontChroot: false
+    # Correctif Phase 7 : l'ancienne version tournait chrootée (dontChroot:
+    # false) et supposait git présent dans la base NixOS fraîchement
+    # installée. git n'y est pas — seul l'ISO l'avait — d'où l'échec réel
+    # "git: command not found" et l'arrêt de toute la séquence Calamares.
+    dontChroot: true
+    timeout: 3600
     script:
-      - "/run/current-system/sw/bin/git clone --depth 1 https://github.com/HiTechTN/HiTech-OS.git /etc/nixos/hitech-os"
-      - "sed -i '/hardware-configuration.nix/a\\      /etc/nixos/hitech-os/os/common.nix' /etc/nixos/configuration.nix"
-      - "/run/current-system/sw/bin/nixos-rebuild boot --option extra-experimental-features 'nix-command flakes'"
+      - '${hitechosPostInstall} "''${ROOT}"'
   '';
 
   hitechosSettingsConf = pkgs.writeText "settings.conf" ''

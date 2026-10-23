@@ -66,7 +66,7 @@ in
   environment.etc."hitechos/ROADMAP.md".source = ../docs/ROADMAP.md;
   environment.systemPackages = [
     pkgs.gnome-software
-    pkgs.git # utilisé par notre shellprocess d'installation (calamares-hitechos.nix) — évite nix-shell/flakes
+    pkgs.git # live : le script Calamares l'utilise hors chroot (calamares-hitechos.nix)
     hitechosStatusItem
     hitechosDocsItem
   ];

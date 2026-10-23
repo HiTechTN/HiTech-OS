@@ -1,10 +1,10 @@
 # HiTech-OS — provisionnement de l'écosystème d'outillage HiTechTN
 # (AgentOS + app2nix) sur le nœud patient-zero.
 #
-# Importé UNIQUEMENT par ./configuration.nix (nœud disque/VM cible) —
-# ni par l'ISO live (iso.nix), ni par le profil headless minimaliste
-# documenté dans le README : ce module ajoute du poids (daemon Docker)
-# incompatible avec l'objectif <150 Mo RAM idle du nœud "nu". Sur un
+# Importé par ./installation.nix (donc patient-zero ET toute installation
+# Calamares) — jamais par l'ISO live (iso.nix) ni par le profil headless
+# minimaliste documenté dans le README : ce module ajoute du poids (daemon
+# Docker) incompatible avec l'objectif <150 Mo RAM idle du nœud "nu". Sur un
 # nœud de production léger, retirer simplement l'import de ce fichier.
 #
 # Audit du 22/10/2026 : avant cet ajout, patient-zero ne contenait NI git

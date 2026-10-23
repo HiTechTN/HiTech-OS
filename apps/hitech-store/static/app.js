@@ -20,8 +20,10 @@ async function api(path, opts={}){
 }
 
 async function refreshAuth(){
-  try{ const me = await (await api("/api/auth/me")).json(); isAdmin = !!me.admin; }catch{ isAdmin=false; }
+  let me = {admin:false, github_oauth:false};
+  try{ me = await (await api("/api/auth/me")).json(); isAdmin = !!me.admin; }catch{ isAdmin=false; }
   $("adminBtn").textContent = isAdmin ? "Console Admin ✓" : "Administration";
+  $("githubLogin").classList.toggle("hidden", !me.github_oauth);
   $("uploadBar").classList.toggle("hidden", !isAdmin);
   if(isAdmin){
     const folders = ["public","private","agents/genio","agents/opencode","agents/claude","agents/shared"];

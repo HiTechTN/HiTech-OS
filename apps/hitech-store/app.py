@@ -1,9 +1,10 @@
 """HiTech Drive — Central Sovereign Storage, Drive Explorer & AI Agent Artifact Hub.
 
 Public explorer : GET /store
-Admin console   : GET /store/admin (OTP-gated, azmi.hitech@gmail.com only)
+Admin console   : GET /store/admin (OTP or optional GitHub OAuth, azmi.hitech@gmail.com only)
 Drive JSON API  : GET /api/drive/list, GET/HEAD /api/drive/download, POST /api/drive/upload
 Auth JSON API   : POST /api/auth/quick-otp, POST /api/auth/verify-otp (alias: /verify), GET /api/auth/me
+GitHub OAuth    : GET /auth/github, GET /auth/github/callback (env-gated + login allow-list)
 Agent API       : POST /api/v1/artifacts/upload, GET /api/v1/artifacts/list,
                   POST /api/v1/artifacts/create-share-link, GET /share/{path}
 """
@@ -24,7 +25,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlencode
+from urllib.request import Request as UrlRequest, urlopen
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Form, File, UploadFile, Header, HTTPException, status
@@ -57,6 +59,15 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 # the lab testable without a mail relay. MUST be 0 in production:
 #   DEV_OTP_FALLBACK=0  →  hard 500 on SMTP failure, PIN cleared (no leak).
 DEV_OTP_FALLBACK = os.getenv("DEV_OTP_FALLBACK", "1").strip().lower() not in ("0", "false", "no", "off")
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# GitHub OAuth (optionnel). Désactivé si l'un des trois secrets manque.
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID", "").strip()
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET", "").strip()
+GITHUB_ALLOWED_LOGIN = os.getenv("GITHUB_ALLOWED_LOGIN", "").strip()
+GITHUB_REDIRECT_URI = os.getenv("GITHUB_REDIRECT_URI", "").strip()
+GITHUB_OAUTH_ENABLED = bool(GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET and GITHUB_ALLOWED_LOGIN)
+GITHUB_ALLOWED_LOGINS = {x.strip().lower() for x in GITHUB_ALLOWED_LOGIN.split(",") if x.strip()}
 
 OTP_TTL_MIN = 10
 SESSION_HOURS = 12
@@ -374,8 +385,11 @@ def make_session_token() -> str:
 
 
 def set_session_cookie(res, token: str):
+    # secure=True sur un portail HTTP localhost empêche le navigateur
+    # d'envoyer le cookie : le panel admin semblait "connecté" côté JSON mais
+    # toutes les requêtes suivantes étaient anonymes. HTTPS reste opt-in.
     res.set_cookie(key="hitech_admin_token", value=token, httponly=True,
-                   secure=True, samesite="lax", max_age=SESSION_HOURS * 3600)
+                   secure=COOKIE_SECURE, samesite="lax", max_age=SESSION_HOURS * 3600)
 
 
 def is_admin(request: Request) -> bool:
@@ -536,7 +550,114 @@ async def verify_json(body: VerifyBody):
 
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
-    return {"admin": is_admin(request), "agent": agent_authorized(request)}
+    return {
+        "admin": is_admin(request),
+        "agent": agent_authorized(request),
+        "github_oauth": GITHUB_OAUTH_ENABLED,
+    }
+
+
+# ------------------------------------------------------- GITHUB OAUTH
+@app.get("/auth/github")
+async def github_login(request: Request):
+    """Start the optional GitHub OAuth admin flow.
+
+    Enabled only when GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET and
+    GITHUB_ALLOWED_LOGIN are all present in the environment (normally via
+    /run/secrets/hitech-store.env). This is an alternative to the email OTP;
+    the allow-list is mandatory.
+    """
+    if not GITHUB_OAUTH_ENABLED:
+        raise HTTPException(status_code=404, detail="GitHub OAuth is not configured.")
+
+    redirect_uri = GITHUB_REDIRECT_URI or str(request.url_for("github_callback"))
+    state = jwt.encode(
+        {
+            "purpose": "github_oauth",
+            "nonce": secrets.token_urlsafe(16),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=10),
+        },
+        SECRET_KEY,
+        algorithm="HS256",
+    )
+    params = urlencode(
+        {
+            "client_id": GITHUB_CLIENT_ID,
+            "redirect_uri": redirect_uri,
+            "scope": "read:user",
+            "state": state,
+        }
+    )
+    return RedirectResponse(f"https://github.com/login/oauth/authorize?{params}", status_code=302)
+
+
+@app.get("/auth/github/callback", name="github_callback")
+async def github_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+):
+    """Finish GitHub OAuth and issue the same admin session cookie as OTP."""
+    if not GITHUB_OAUTH_ENABLED:
+        raise HTTPException(status_code=404, detail="GitHub OAuth is not configured.")
+    if error:
+        raise HTTPException(status_code=400, detail=f"GitHub OAuth refusé : {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Réponse GitHub incomplète.")
+
+    try:
+        claims = jwt.decode(state, SECRET_KEY, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=400, detail="État OAuth invalide ou expiré.")
+    if claims.get("purpose") != "github_oauth":
+        raise HTTPException(status_code=400, detail="État OAuth invalide.")
+
+    redirect_uri = GITHUB_REDIRECT_URI or str(request.url_for("github_callback"))
+    body = urlencode(
+        {
+            "client_id": GITHUB_CLIENT_ID,
+            "client_secret": GITHUB_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": redirect_uri,
+        }
+    ).encode()
+    token_req = UrlRequest(
+        "https://github.com/login/oauth/access_token",
+        data=body,
+        headers={"Accept": "application/json", "User-Agent": "hitech-store"},
+    )
+    try:
+        with urlopen(token_req, timeout=15) as resp:
+            token_payload = json.loads(resp.read().decode())
+        access_token = token_payload.get("access_token", "")
+        if not access_token:
+            raise ValueError("no access_token in GitHub response")
+
+        user_req = UrlRequest(
+            "https://api.github.com/user",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": "hitech-store",
+            },
+        )
+        with urlopen(user_req, timeout=15) as resp:
+            user = json.loads(resp.read().decode())
+    except Exception as exc:  # network/JSON/OAuth exchange
+        log.warning("GitHub OAuth exchange failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Échange GitHub OAuth impossible.")
+
+    login = str(user.get("login", "")).strip().lower()
+    if login not in GITHUB_ALLOWED_LOGINS:
+        log.warning("GitHub OAuth denied for login=%r", login)
+        raise HTTPException(status_code=403, detail="Compte GitHub non autorisé.")
+
+    token = make_session_token()
+    res = RedirectResponse("/store", status_code=303)
+    set_session_cookie(res, token)
+    log.info("Admin session established via GitHub OAuth (login=%s)", login)
+    return res
 
 
 # ------------------------------------------------------------- DRIVE API
