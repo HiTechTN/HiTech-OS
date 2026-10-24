@@ -228,8 +228,7 @@ in
 
     cachePublicKey = lib.mkOption {
       type = lib.types.str;
-      default = "";
-      example = "hitechos-cache-1:AbCdEf...=";
+      default = "hitechos-cache-1:vTmn/dRSOqEFdrpLs13HYOLv1DnYLvYnDfu7icj3dQY=";
       description = ''
         Public key of the binary cache embedded in the ISO. Empty disables
         signature verification; production images MUST set this.

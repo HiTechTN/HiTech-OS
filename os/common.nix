@@ -14,6 +14,8 @@
   # - requis aussi par notre OTA (system.autoUpgrade.flake, Phase 6)
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
+  nix.settings.trusted-public-keys = [ "hitechos-cache-1:vTmn/dRSOqEFdrpLs13HYOLv1DnYLvYnDfu7icj3dQY=" ];
+
   # Outils indispensables au premier boot et aux reconstructions locales.
   # `git` était déjà sur l'ISO live mais PAS dans le système installé : le
   # job Calamares ne peut donc pas compter sur le git de la cible. Il est
