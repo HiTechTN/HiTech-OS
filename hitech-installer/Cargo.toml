@@ -1,0 +1,9 @@
+[package]
+name = "hitech-installer"
+version = "2.0.0"
+edition = "2021"
+description = "HiTech-OS Futuristic Cybernetic Installer & Live Deck"
+
+[dependencies]
+eframe = { version = "0.28.1", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+egui = "0.28.1"

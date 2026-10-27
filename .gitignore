@@ -1,5 +1,6 @@
 # Rust
 /ai-daemon/target/
+/hitech-installer/target/
 
 # Nix
 result
@@ -12,3 +13,4 @@ firmware/patient-zero/.pio/
 .DS_Store
 *.log
 firmware/patient-zero/src/secrets.h
+*.qcow2

@@ -1,12 +1,43 @@
 # Phase 8 — NetInstaller minimal + HiTech-Shell (Rust Wayland DE)
 
-Status: architecture + scaffold landed; runtime implementation and cache upload pipeline are next.
-Date: 2026-10-23
+Status: architecture + scaffold landed; 8.1 Rust GUI installer is built and evaluated.
+Date: 2026-10-23 (updated 2026-10-27)
 Repo: `github:HiTechTN/HiTech-OS`
 Base commit: `2053f58` (Phase 7) + Phase 8 working tree
 
 This document is the master reference for the Phase 8 pivot. It is deliberately
 written so that a future agent can resume without re-reading the whole repo.
+
+---
+
+## 0. Phase 8.1 addendum — Rust GUI replaces Calamares (2026-10-27)
+
+The Calamares/Qt installer described in the older sections of this report has
+been replaced end-to-end by `hitech-installer`, a Rust `eframe`/`egui` kiosk app:
+
+- **Package**: `hitech-installer/default.nix` (`rustPlatform.buildRustPackage`,
+  `Cargo.lock` pinned, GL/Wayland/X11 runtime wrapper) and
+  `packages.x86_64-linux.hitech-installer` in the flake.
+- **Kiosk**: `services.cage.program` points at the Rust binary; Calamares and
+  its Qt/KDE dependencies are removed from the live closure.
+- **Flow**: Welcome → Configuration → Installing → Done; French/English labels;
+  anonymous identity form; WiFi (`nmcli`) and disk (`lsblk`) discovery; live
+  terminal launcher (`foot`); GPT/ESP/ext4 partitioning; `nixos-generate-config`;
+  pinned profile fetch; `nixos-install` with cache substituters.
+- **Privilege**: the GUI runs as `nixos` and uses passwordless `sudo` scoped to
+  the live ISO (`security.sudo.wheelNeedsPassword = false`). The target profile
+  keeps password-protected sudo and the operator password created by the form.
+- **No hardcoded live password**: the live user has an empty password; the
+  target identity is entirely supplied by the GUI.
+- **Measured ISO**: **692 MiB** (725,614,592 bytes), under the ~800 MiB target.
+  Built with `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage`.
+- **Verified**: `cargo check` clean; `nix build .#hitech-installer` succeeds;
+  `nix flake check --no-build` passes; the ISO derivation builds.
+- **Still pending**: boot the ISO in a VM/physical machine and run a complete
+  install (including the pinned profile fetch and cache substitution).
+
+The older Calamares-specific sections below are retained as historical design
+notes; where they conflict with this addendum, this addendum wins.
 
 ---
 
@@ -16,10 +47,10 @@ Phase 7 made the legacy full graphical ISO (GNOME + Flatpak + Firefox +
 Calamares, ~1.9 GiB measured) install HiTech-OS services correctly. Phase 8
 replaces that image with two separate, smaller artefacts:
 
-1. **NetInstaller** — a minimal Calamares ISO (`nixosConfigurations.netinstaller`)
-   that only contains the installer, networking tools, `git`/`curl`, and the
-   NixOS installation machinery. It clones the HiTech-OS configuration from
-   GitHub at the revision baked into the ISO and installs the target closure
+1. **NetInstaller** — a minimal `cage` kiosk ISO (`nixosConfigurations.netinstaller`)
+   running the Rust `hitech-installer` (eframe/egui) GUI. It partitions the
+   target, clones the HiTech-OS configuration at the revision baked into the
+   ISO, writes an anonymous operator identity, and installs the target closure
    from the HiTech-Store binary cache.
 2. **HiTech-Shell** — the Rust/Wayland desktop environment, scaffolded as a
    Smithay compositor + a declarative shell UI with three NixOS layout
@@ -34,7 +65,7 @@ Measured state after the scaffold:
 
 | Artefact | Command | Result |
 |---|---|---|
-| NetInstaller ISO | `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage` | built; **977 MiB** (target ~800 MiB — see §4.4) |
+| NetInstaller ISO | `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage` | built; **692 MiB** in 8.1 (see §0) |
 | HiTech-Shell scaffold | `nix build .#hitech-shell` / `nix run .#hitech-shell` | built and runs (`hybrid` layout by default) |
 | Flake evaluation | `nix flake check --no-build` | all checks passed |
 | Legacy full ISO | unchanged | still available as `.#nixosConfigurations.iso` |
@@ -176,7 +207,10 @@ This keeps the installed system reproducible without shipping the channel.
 
 ### 4.4 Size budget — measured vs target
 
-Measured with the current scaffold:
+> Historical (Calamares-era) measurement. The 8.1 Rust GUI ISO is **692 MiB**;
+> see §0.
+
+Measured with the Calamares scaffold:
 
 | Item | Value |
 |---|---|
@@ -495,7 +529,8 @@ services.hitech-cache.enable = true;   # Harmonia cache
 - `nix flake check --no-build` passes for `devShells`, `packages`,
   `nixosConfigurations.netinstaller`, `patient-zero`, and `iso`.
 - `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage`
-  succeeds; ISO size 977 MiB.
+  succeeds; ISO size 692 MiB after the 8.1 Rust GUI replacement (the older
+  977 MiB figure in §4.4 is the Calamares-era measurement).
 - `nix build .#hitech-shell` succeeds; `nix run .#hitech-shell` prints the
   hybrid layout plan and compositor placeholder.
 - `patient-zero` toplevel derivation evaluates successfully with the new

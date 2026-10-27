@@ -1,16 +1,16 @@
-# HiTech-OS — Phase 8 NetInstaller (minimal Calamares ISO).
+# HiTech-OS — Phase 8 NetInstaller (minimal eframe/egui ISO).
 #
 # Goal: a small (~800 MB target) live ISO that contains only:
-#   - a Wayland kiosk running Calamares,
+#   - a Wayland kiosk running the Rust `hitech-installer` GUI,
 #   - networking tools,
 #   - git + curl,
 #   - the NixOS installer machinery.
 #
-# The actual HiTech-OS closure is NOT in the ISO. Calamares:
-#   1. partitions and mounts the target (stock `nixos` job),
-#   2. runs `shellprocess@hitechos`, which fetches the HiTech-OS config pinned
-#      to the ISO's revision from GitHub,
-#   3. calls `nixos-install` with the HiTech-Store binary cache as the primary
+# The actual HiTech-OS closure is NOT in the ISO. The graphical installer:
+#   1. partitions/formats/mounts the target,
+#   2. fetches the HiTech-OS profile pinned to the ISO's revision from GitHub,
+#   3. writes the operator's anonymous identity into configuration.nix,
+#   4. calls `nixos-install` with the HiTech-Store binary cache as the primary
 #      substituter, so the target closure is downloaded instead of rebuilt.
 #
 # Two outputs are therefore produced by the flake:
@@ -47,150 +47,10 @@ let
     else
       "https://github.com/NixOS/nixpkgs/archive/nixos-unstable.tar.gz";
 
-  hitechosPostInstall = pkgs.writeShellScript "hitechos-netinstaller" ''
-    set -eu
+  # Graphical HiTech-OS installer (eframe/egui). It replaces Calamares and
+  # owns the partition/format/mount/install pipeline.
+  hitechInstaller = pkgs.callPackage ../hitech-installer { };
 
-    log() {
-      printf '[hitechos-netinstaller] %s\n' "$*"
-    }
-
-    target="$1"
-    repo_url=${lib.escapeShellArg cfg.repoUrl}
-    repo_ref=${lib.escapeShellArg cfg.repoRef}
-    cache_url=${lib.escapeShellArg cfg.cacheUrl}
-    cache_key=${lib.escapeShellArg cachePublicKey}
-    allow_source_fallback=${lib.boolToString cfg.allowSourceFallback}
-
-    repo_rel="/etc/nixos/hitech-os"
-    repo="$target$repo_rel"
-    cfg_file="$target/etc/nixos/configuration.nix"
-    import_rel="./hitech-os/os/installation.nix"
-
-    [ -f "$cfg_file" ] || {
-      log "configuration.nix not found at $cfg_file; did the stock nixos job run?"
-      exit 1
-    }
-
-    if ${pkgs.curl}/bin/curl -fsS --max-time 20 "$cache_url/nix-cache-info" >/dev/null 2>&1; then
-      log "binary cache reachable: $cache_url"
-    else
-      log "WARNING: binary cache unreachable: $cache_url"
-      if [ "$allow_source_fallback" != "true" ]; then
-        log "allowSourceFallback=false: aborting instead of rebuilding from source"
-        exit 1
-      fi
-      log "allowSourceFallback=true: continuing; target closure will be built locally"
-    fi
-
-    # Fetch exactly the revision baked into the ISO. When repoRef is a commit
-    # SHA, GitHub serves it through uploadpack.allowReachableSHA1InWant; when
-    # it is a branch/tag, this resolves to that ref. In production the flake
-    # passes `self.rev`, so a clean release ISO is pinnable.
-    if [ ! -d "$repo/.git" ]; then
-      mkdir -p "$repo"
-      ${pkgs.git}/bin/git -C "$repo" init -q
-      ${pkgs.git}/bin/git -C "$repo" remote add origin "$repo_url" 2>/dev/null || true
-    fi
-    ${pkgs.git}/bin/git -C "$repo" remote set-url origin "$repo_url"
-    ${pkgs.git}/bin/git -C "$repo" fetch --depth 1 origin "$repo_ref"
-    ${pkgs.git}/bin/git -C "$repo" checkout --detach --force FETCH_HEAD
-
-    # Keep the target's hardware/bootloader config untouched; only append the
-    # HiTech-OS profile import. Idempotent so a retried install does not add
-    # the line twice.
-    if ! ${pkgs.gnugrep}/bin/grep -qF "$import_rel" "$cfg_file"; then
-      ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg_file"
-    fi
-
-    trusted_keys="cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-    if [ -n "$cache_key" ]; then
-      trusted_keys="$cache_key $trusted_keys"
-      log "trusting cache key: $cache_key"
-    else
-      log "WARNING: no cache public key configured; cache signatures are not verified"
-    fi
-
-    # The generated target configuration is a plain NixOS config (Calamares
-    # generates it), so it resolves `<nixpkgs>` through NIX_PATH. Point it at
-    # the exact revision used to build this ISO instead of bundling the whole
-    # channel in the image.
-    export NIX_PATH="nixpkgs=${nixpkgsArchive}"
-    log "NIX_PATH=nixpkgs=${nixpkgsArchive}"
-    log "running nixos-install (substituters: $cache_url https://cache.nixos.org)"
-    ${pkgs.nixos-install}/bin/nixos-install \
-      --root "$target" \
-      --no-root-passwd \
-      --option substituters "$cache_url https://cache.nixos.org" \
-      --option trusted-public-keys "$trusted_keys" \
-      --option extra-experimental-features "nix-command flakes"
-  '';
-
-  hitechosShellprocessConf = pkgs.writeText "shellprocess-hitechos.conf" ''
-    ---
-    # Runs in the LIVE environment (dontChroot: true), from which the target is
-    # mounted at ''${ROOT}. This keeps git/curl/nixos-install in the ISO and out
-    # of the freshly unpacked target.
-    dontChroot: true
-    timeout: 7200
-    script:
-      - '${hitechosPostInstall} "''${ROOT}"'
-  '';
-
-  # Deliberately small Calamares sequence. It uses the stock NixOS `nixos`
-  # job only for partition/mount/base install; the HiTech-OS closure comes
-  # from the cache in `shellprocess@hitechos`.
-  hitechosSettingsConf = pkgs.writeText "settings.conf" ''
-    ---
-    modules-search: [ local, @out@/lib/calamares/modules ]
-
-    instances:
-    - module:   nixos
-      weight:   48
-    - id:       hitechos
-      module:   shellprocess
-      config:   shellprocess-hitechos.conf
-
-    sequence:
-    - show:
-      - welcome
-      - locale
-      - keyboard
-      - users
-      - partition
-      - summary
-    - exec:
-      - partition
-      - mount
-      - nixos
-      - shellprocess@hitechos
-      - users
-      - umount
-    - show:
-      - finished
-
-    branding: nixos
-    prompt-install: false
-    dont-chroot: false
-    oem-setup: false
-    disable-cancel: false
-    disable-cancel-during-exec: false
-    hide-back-and-next-during-exec: false
-    quit-at-end: false
-  '';
-
-  calamaresExtensions = pkgs.calamares-nixos-extensions.overrideAttrs (old: {
-    postInstall = (old.postInstall or "") + ''
-      cp ${hitechosShellprocessConf} $out/etc/calamares/modules/shellprocess-hitechos.conf
-      cp ${hitechosSettingsConf} $out/etc/calamares/settings.conf
-      # Our copy reintroduces the raw @out@ placeholder; the package's own
-      # postInstall already substituted its settings.conf, so substitute ours too.
-      substituteInPlace $out/etc/calamares/settings.conf --replace-fail '@out@' "$out"
-    '';
-  });
-
-  calamares = pkgs.calamares-nixos.override {
-    calamares-nixos-extensions = calamaresExtensions;
-  };
 in
 {
   options.hitechos.netinstaller = {
@@ -207,7 +67,7 @@ in
     repoUrl = lib.mkOption {
       type = lib.types.str;
       default = "https://github.com/HiTechTN/HiTech-OS.git";
-      description = "Git remote fetched by Calamares inside the live session.";
+      description = "Git remote fetched by the graphical installer inside the live session.";
     };
 
     repoRef = lib.mkOption {
@@ -240,20 +100,11 @@ in
       internal = true;
       default = nixpkgsArchive;
       description = ''
-        Internal: Nixpkgs tarball URL exported as NIX_PATH by the installer
-        script. Derived from the ISO's exact Nixpkgs revision.
+        Internal: Nixpkgs tarball URL exported as NIX_PATH by the graphical
+        installer. Derived from the ISO's exact Nixpkgs revision.
       '';
     };
 
-    installerScript = lib.mkOption {
-      type = lib.types.path;
-      internal = true;
-      default = hitechosPostInstall;
-      description = ''
-        Internal: the `shellprocess@hitechos` script. Exposed for inspection
-        and tests; not a user-facing option.
-      '';
-    };
 
     allowSourceFallback = lib.mkOption {
       type = lib.types.bool;
@@ -282,58 +133,56 @@ in
     };
 
     # --- Graphical installer surface -------------------------------------
-    # cage is a ~tiny Wayland kiosk compositor; it keeps Qt/Calamares out of a
-    # full GNOME stack and is the main reason this ISO can approach 800 MB.
+    # cage is a tiny Wayland kiosk compositor. The eframe/egui installer owns
+    # the whole installation flow, so Calamares/Qt/KDE are no longer pulled in.
     services.cage = {
       enable = true;
       user = "nixos";
-      program = "${calamares}/bin/calamares";
+      program = "${hitechInstaller}/bin/hitech-installer";
       environment = {
-        QT_QPA_PLATFORM = "wayland";
-        QT_WAYLAND_DISABLE_WINDOWDECORATION = "1";
+        # Consumed by the Rust installer at install time.
+        HITECH_CACHE_URL = cfg.cacheUrl;
+        HITECH_CACHE_KEY = cachePublicKey;
+        HITECH_NIXPKGS_ARCHIVE = nixpkgsArchive;
+        HITECH_STATE_VERSION = config.system.stateVersion;
+        HITECH_REPO_URL = cfg.repoUrl;
+        HITECH_REPO_REF = cfg.repoRef;
+        HITECH_ALLOW_SOURCE_FALLBACK = lib.boolToString cfg.allowSourceFallback;
+        # eframe/glow: prefer the Wayland/EGL path inside Cage.
+        WINIT_UNIX_BACKEND = "wayland";
       };
     };
 
     services.libinput.enable = true;
+    # eframe/glow needs EGL/GL. The minimal installation-cd base does not set
+    # this, so enable Mesa/DRM explicitly for the kiosk compositor.
+    hardware.graphics.enable = true;
     security.polkit.enable = true;
-    security.polkit.enablePkexecWrapper = true;
-    # NOTE: `programs.partition-manager.enable` is intentionally NOT set here.
-    # It pulls the full KDE Partition Manager/Qt stack (~1.7 GiB closure) into
-    # the ISO. Calamares' partition job uses its own kpmcore library; validate
-    # real partitioning before trusting this in production.
 
-    # Live-session policy: wheel (the live `nixos` user) may run pkexec. This
-    # is scoped to the ephemeral ISO and must never be copied to the target.
-    security.polkit.extraConfig = ''
-      polkit.addRule(function(action, subject) {
-        if (subject.isInGroup("wheel")) {
-          return polkit.Result.YES;
-        }
-      });
-    '';
+    # The GUI runs as the unprivileged live `nixos` user and escalates only the
+    # installer commands through sudo. This NOPASSWD policy is scoped to the
+    # ephemeral live ISO and must never be copied to the target.
+    security.sudo.wheelNeedsPassword = false;
 
     # `profiles/base.nix` from installation-cd-base ships a large repair
     # toolkit (testdisk, ddrescue, w3m, ms-sys, …). Force a curated package
-    # set instead: Calamares + its partitioning/user tools + git/curl + Nix.
+    # set instead: the Rust installer, its storage/network tools, git/curl,
+    # and a Wayland terminal for live exploration.
     environment.systemPackages = lib.mkForce (with pkgs; [
-      calamares
+      hitechInstaller
       git
       curl
-      nixos-install
+      foot
+      sudo
+      nixos-install-tools
       nix
-      gnugrep
-      gnused
+      coreutils
       networkmanager
       util-linux
+      iproute2
       parted
-      gptfdisk
       e2fsprogs
       dosfstools
-      btrfs-progs
-      xfsprogs
-      ntfs3g
-      lvm2
-      cryptsetup
       efibootmgr
       efivar
       kmod
@@ -405,13 +254,14 @@ in
     fonts.packages = [ pkgs.dejavu_fonts ];
 
     # --- Live credentials (ephemeral; never reused on the target) ---------
-    users.users.nixos.initialHashedPassword = lib.mkForce null;
-    users.users.nixos.initialPassword = "hitechos";
+    # No hardcoded live password: the kiosk session is passwordless by design
+    # and the operator identity is created exclusively by the GUI form.
+    users.users.nixos.initialHashedPassword = lib.mkForce "";
     users.users.nixos.extraGroups = [ "wheel" "networkmanager" ];
 
-    # Calamares/KDE dominates the squashfs payload. xz compresses the store
-    # noticeably better than zstd-19 for this workload at the cost of a slower
-    # image build; the compressed ISO is the artifact users download.
+    # eframe/egui + Mesa are much smaller than the old Calamares/Qt/KDE stack,
+    # but xz still compresses this closure noticeably better than zstd-19 at
+    # the cost of a slower image build; the compressed ISO is what users get.
     isoImage.squashfsCompression = lib.mkDefault "xz -Xdict-size 100%";
 
     # --- Boot media identity ---------------------------------------------

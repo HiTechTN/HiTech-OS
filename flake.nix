@@ -26,6 +26,7 @@
         packages = {
           default = pkgs.callPackage ./apps/hitech-shell { };
           hitech-shell = pkgs.callPackage ./apps/hitech-shell { };
+          hitech-installer = pkgs.callPackage ./hitech-installer { };
         };
       }
     ) // {
