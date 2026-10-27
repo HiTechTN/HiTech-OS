@@ -1,6 +1,6 @@
 # Phase 8 — NetInstaller minimal + HiTech-Shell (Rust Wayland DE)
 
-Status: architecture + scaffold landed; 8.1 Rust GUI installer is built and evaluated.
+Status: architecture + scaffold landed; 8.1 Rust GUI installer is built and boots in QEMU.
 Date: 2026-10-23 (updated 2026-10-27)
 Repo: `github:HiTechTN/HiTech-OS`
 Base commit: `2053f58` (Phase 7) + Phase 8 working tree
@@ -29,12 +29,51 @@ been replaced end-to-end by `hitech-installer`, a Rust `eframe`/`egui` kiosk app
   keeps password-protected sudo and the operator password created by the form.
 - **No hardcoded live password**: the live user has an empty password; the
   target identity is entirely supplied by the GUI.
-- **Measured ISO**: **692 MiB** (725,614,592 bytes), under the ~800 MiB target.
+- **Measured ISO**: **823 MiB** (862,978,048 bytes), above the ~800 MiB target.
   Built with `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage`.
+  The increase over the earlier 692 MiB image is the restored base repair/login
+  toolkit plus the targeted amdgpu firmware, not Calamares.
 - **Verified**: `cargo check` clean; `nix build .#hitech-installer` succeeds;
-  `nix flake check --no-build` passes; the ISO derivation builds.
-- **Still pending**: boot the ISO in a VM/physical machine and run a complete
-  install (including the pinned profile fetch and cache substitution).
+  `nix flake check --no-build` passes; the ISO builds and boots in QEMU with
+  `cage-tty1` active and the Rust Welcome screen rendered.
+- **Still pending**: complete a full install from the ISO (pinned profile fetch
+  and cache substitution), then validate physical hardware.
+
+### 0.1 Live-login regression fix (2026-10-27)
+
+The first 8.1 ISO booted to a black screen. `os/netinstaller.nix` used
+`environment.systemPackages = lib.mkForce ...` and
+`environment.defaultPackages = lib.mkForce [ ]`, which removed
+`bashInteractive` and the base login/tty packages. `cage-tty1` and the getty
+login could not exec `/run/current-system/sw/bin/bash`, so the kiosk never
+appeared.
+
+Fixes:
+- Removed both `lib.mkForce` overrides. The base profile now merges with the
+  live tool set; `bashInteractive` and `coreutils` are explicit safety nets.
+- Wrapped `hitech-installer` with a runtime PATH for `bash`, `util-linux`,
+  `NetworkManager`, `iproute2`, `parted`, `dosfstools`, `e2fsprogs`,
+  `nixos-install-tools`, `git`, `foot`, `nix`, and `/run/wrappers/bin`.
+- Cage env: `WLR_NO_HARDWARE_CURSORS=1`, `WLR_RENDERER_ALLOW_SOFTWARE=1`,
+  `XDG_RUNTIME_DIR=/run/user/1000`. `LIBGL_ALWAYS_SOFTWARE=1` is set by the
+  package wrapper only when neither `/dev/dri/card0` nor
+  `/dev/dri/renderD128` exists, preserving `amdgpu` acceleration.
+- Added `amdgpu`/`virtio_gpu` to `boot.initrd.kernelModules`,
+  `hardware.graphics.enable = true`, and the `video`/`render`/`input`/`tty`
+  groups.
+- `services.getty.autologinUser = "nixos"` plus an enabled
+  `serial-getty@ttyS0` autologin.
+- Added a 90 MiB `amdgpu` firmware subset (Polaris/RX 580 included) to
+  `hardware.firmware`; full `linux-firmware` is 1.9 GiB.
+
+Verified in QEMU (KVM, `-vga virtio`, `-serial stdio`):
+- `/run/current-system/sw/bin/bash` resolves to `bash-interactive-5.3p15` and
+  `BASH_EXIT=0`.
+- Serial `ttyS0` autologins as `nixos`; groups include
+  `wheel,tty,video,networkmanager,input,render`.
+- `systemctl is-active cage-tty1` is `active`; the framebuffer shows the Rust
+  installer Welcome screen at 1024x768 (non-black).
+- `initrd` contains `amdgpu/polaris10_*.bin.zst` firmware.
 
 The older Calamares-specific sections below are retained as historical design
 notes; where they conflict with this addendum, this addendum wins.
@@ -65,15 +104,15 @@ Measured state after the scaffold:
 
 | Artefact | Command | Result |
 |---|---|---|
-| NetInstaller ISO | `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage` | built; **692 MiB** in 8.1 (see §0) |
+| NetInstaller ISO | `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage` | built; **823 MiB** in 8.1 (see §0) |
 | HiTech-Shell scaffold | `nix build .#hitech-shell` / `nix run .#hitech-shell` | built and runs (`hybrid` layout by default) |
 | Flake evaluation | `nix flake check --no-build` | all checks passed |
 | Legacy full ISO | unchanged | still available as `.#nixosConfigurations.iso` |
 
-The ~800 MiB target is **not yet met**. The remaining gap is Calamares/Qt/KDE
-runtime, which dominates the compressed squashfs payload. §4.4 lists the
-reduction options and the trade-offs; it is an explicit open decision, not a
-silent regression.
+The ~800 MiB target is **not yet met** (823 MiB). The increase from 692 MiB is
+from restoring the base login/repair packages and adding the amdgpu firmware
+subset; the Calamares/Qt/KDE runtime is gone. §4.4 records the historical
+reduction options; the remaining size trade-off is an explicit open decision.
 
 ---
 
@@ -178,22 +217,24 @@ hard invariant.
 | `system.installer.channel.enable` | `false` | Do not embed the full Nixpkgs source tree (hundreds of MB). |
 | `system.extraDependencies` | `[]` | Drop the stock `stdenvNoCC`/busybox/jq payload. |
 | `hardware.enableAllHardware` | `false` | Drop all-firmware and all-hardware initrd modules. |
-| `hardware.enableRedistributableFirmware` | `false` | Same; wired-only live networking is the trade-off. |
+| `hardware.enableRedistributableFirmware` | `false` | No all-firmware payload; a targeted amdgpu subset is added via `hardware.firmware`. |
+| `hardware.firmware` | amdgpu subset | RX 580/Polaris firmware, 90 MiB instead of the 1.9 GiB `linux-firmware`. |
 | `boot.swraid.enable` | `false` | No software RAID on the live medium. |
 | `services.openssh.enable` | `false` | No SSH server on the live medium. |
 | `boot.supportedFilesystems.zfs` | `false` | No ZFS module on the live medium. |
-| `environment.systemPackages` | curated list | Replaces the `profiles/base.nix` repair toolkit. |
-| `environment.defaultPackages` | `[]` | Equivalent of `profiles/minimal.nix` (Perl etc.). |
+| `environment.systemPackages` | merged base + live tools | Do **not** use `lib.mkForce`; the base login/repair packages must stay. |
+| `environment.defaultPackages` | installation-cd-base value (`rsync`) | Not forced empty; `bashInteractive`/`coreutils` are explicit packages. |
 | `documentation.*` | `false` | No manuals on the medium. |
 | `i18n.supportedLocales` | `en_US`, `fr_FR` | All locales are expensive. |
 | `isoImage.squashfsCompression` | `xz -Xdict-size 100%` | Better ratio than zstd-19 for this payload. |
 
-The curated package list is:
+The live package set (merged with the base profile) is:
 
 ```
-calamares, git, curl, nixos-install, nix, gnugrep, gnused, networkmanager,
-util-linux, parted, gptfdisk, e2fsprogs, dosfstools, btrfs-progs, xfsprogs,
-ntfs3g, lvm2, cryptsetup, efibootmgr, efivar, kmod, hwdata, pciutils, usbutils
+bashInteractive, coreutils, util-linux, iproute2, networkmanager, parted,
+gptfdisk, dosfstools, e2fsprogs, btrfs-progs, nixos-install-tools, git, curl,
+foot, mesa, libglvnd, hitech-installer, sudo, nix, efibootmgr, efivar, kmod,
+hwdata, pciutils, usbutils
 ```
 
 `NIX_PATH` is exported by the installer script to the exact Nixpkgs revision of
@@ -207,8 +248,9 @@ This keeps the installed system reproducible without shipping the channel.
 
 ### 4.4 Size budget — measured vs target
 
-> Historical (Calamares-era) measurement. The 8.1 Rust GUI ISO is **692 MiB**;
-> see §0.
+> Historical (Calamares-era) measurement. The bootable 8.1 Rust GUI ISO is
+> **823 MiB** (base login/repair toolkit + amdgpu firmware); see §0. The
+> Calamares-era options below are retained only for context.
 
 Measured with the Calamares scaffold:
 
@@ -529,8 +571,9 @@ services.hitech-cache.enable = true;   # Harmonia cache
 - `nix flake check --no-build` passes for `devShells`, `packages`,
   `nixosConfigurations.netinstaller`, `patient-zero`, and `iso`.
 - `nix build .#nixosConfigurations.netinstaller.config.system.build.isoImage`
-  succeeds; ISO size 692 MiB after the 8.1 Rust GUI replacement (the older
-  977 MiB figure in §4.4 is the Calamares-era measurement).
+  succeeds; ISO size 823 MiB after the 8.1 Rust GUI replacement and the
+  login/serial fix (the older 977 MiB figure in §4.4 is the Calamares-era
+  measurement).
 - `nix build .#hitech-shell` succeeds; `nix run .#hitech-shell` prints the
   hybrid layout plan and compositor placeholder.
 - `patient-zero` toplevel derivation evaluates successfully with the new
@@ -538,8 +581,10 @@ services.hitech-cache.enable = true;   # Harmonia cache
 - Cache publish mechanism validated locally: `sign-cache-closure.sh` signed a
   7-path closure, `nix copy` propagated the signature into a second store, and
   `nix store verify --recursive --sigs-needed 1` accepted the copy.
-- Not yet done: ISO boot in a VM, Calamares run, cache server runtime test,
-  `ssh-ng` push against the real host, physical install.
+- QEMU boot validated with `-vga virtio`: serial autologin, `/run/current-system/sw/bin/bash`,
+  `cage-tty1` active, and the Rust Welcome screen rendered. Full install, cache
+  server runtime test, `ssh-ng` push against the real host, and physical
+  install are still pending.
 
 ---
 

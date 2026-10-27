@@ -3,6 +3,20 @@
   rustPlatform,
   pkg-config,
   makeWrapper,
+  bashInteractive,
+  coreutils,
+  util-linux,
+  networkmanager,
+  iproute2,
+  parted,
+  dosfstools,
+  e2fsprogs,
+  nixos-install-tools,
+  git,
+  foot,
+  nix,
+  mesa,
+  libglvnd,
   libGL,
   libxkbcommon,
   wayland,
@@ -35,6 +49,8 @@ rustPlatform.buildRustPackage {
 
   buildInputs = [
     libGL
+    libglvnd
+    mesa
     libxkbcommon
     wayland
     libx11
@@ -45,11 +61,32 @@ rustPlatform.buildRustPackage {
 
   # eframe/glow dlopens the graphics stack at runtime. Keep the library path
   # wrapped so the binary also works outside the NixOS module's session.
+  # PATH is prepended with the tools the installer shells out to so it does
+  # not depend on the systemd service's minimal PATH. /run/wrappers/bin makes
+  # the setuid sudo wrapper discoverable without pinning a non-setuid package.
   postInstall = ''
     wrapProgram "$out/bin/hitech-installer" \
+      --prefix PATH : "${
+        lib.makeBinPath [
+          bashInteractive
+          coreutils
+          util-linux
+          networkmanager
+          iproute2
+          parted
+          dosfstools
+          e2fsprogs
+          nixos-install-tools
+          git
+          foot
+          nix
+        ]
+      }:/run/wrappers/bin" \
       --prefix LD_LIBRARY_PATH : "${
         lib.makeLibraryPath [
           libGL
+          libglvnd
+          mesa
           libxkbcommon
           wayland
           libx11
@@ -57,7 +94,12 @@ rustPlatform.buildRustPackage {
           libxi
           libxrandr
         ]
-      }"
+      }" \
+      --run '
+        if [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/renderD128 ]; then
+          export LIBGL_ALWAYS_SOFTWARE=1
+        fi
+      '
   '';
 
   # The installer is an interactive GUI; cargo test has no headless suite.

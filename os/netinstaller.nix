@@ -51,6 +51,15 @@ let
   # owns the partition/format/mount/install pipeline.
   hitechInstaller = pkgs.callPackage ../hitech-installer { };
 
+  # amdgpu needs matching firmware before the kernel can initialise Polaris
+  # (RX 580). linux-firmware is ~1.9 GiB; copy only the 90 MiB amdgpu subset so
+  # the firmware is available in stage-1 without ballooning the ISO. Symlinks
+  # inside the directory are relative, so cp -a keeps them valid.
+  amdgpuFirmware = pkgs.runCommandLocal "amdgpu-firmware" { } ''
+    mkdir -p $out/lib/firmware
+    cp -a ${pkgs.linux-firmware}/lib/firmware/amdgpu $out/lib/firmware/
+  '';
+
 in
 {
   options.hitechos.netinstaller = {
@@ -150,13 +159,25 @@ in
         HITECH_ALLOW_SOURCE_FALLBACK = lib.boolToString cfg.allowSourceFallback;
         # eframe/glow: prefer the Wayland/EGL path inside Cage.
         WINIT_UNIX_BACKEND = "wayland";
+        # QEMU/virtio and some real GPUs need software cursors; keep the
+        # hardware path when /dev/dri is available.
+        WLR_NO_HARDWARE_CURSORS = "1";
+        WLR_RENDERER_ALLOW_SOFTWARE = "1";
+        XDG_RUNTIME_DIR = "/run/user/1000";
+        # LIBGL_ALWAYS_SOFTWARE is intentionally NOT set here. The package
+        # wrapper enables it only when no /dev/dri node exists, so an AMD RX
+        # 580 can still use amdgpu/EGL acceleration.
       };
     };
 
     services.libinput.enable = true;
     # eframe/glow needs EGL/GL. The minimal installation-cd base does not set
-    # this, so enable Mesa/DRM explicitly for the kiosk compositor.
+    # this, so enable Mesa/DRM explicitly for the kiosk compositor. amdgpu and
+    # virtio_gpu are loaded early so both the RX 580 and QEMU virtio-vga have a
+    # DRM device by the time Cage starts.
     hardware.graphics.enable = true;
+    boot.initrd.kernelModules = [ "amdgpu" "virtio_gpu" ];
+    hardware.firmware = [ amdgpuFirmware ];
     security.polkit.enable = true;
 
     # The GUI runs as the unprivileged live `nixos` user and escalates only the
@@ -164,32 +185,38 @@ in
     # ephemeral live ISO and must never be copied to the target.
     security.sudo.wheelNeedsPassword = false;
 
-    # `profiles/base.nix` from installation-cd-base ships a large repair
-    # toolkit (testdisk, ddrescue, w3m, ms-sys, …). Force a curated package
-    # set instead: the Rust installer, its storage/network tools, git/curl,
-    # and a Wayland terminal for live exploration.
-    environment.systemPackages = lib.mkForce (with pkgs; [
-      hitechInstaller
+    # Do NOT use lib.mkForce here. The installation-cd base contributes the
+    # login/tty/shell packages; overriding the list is what removed bash and
+    # caused the black screen/login loop. Merge our live tools with the base
+    # set and make bashInteractive/coreutils explicit as a safety net.
+    environment.systemPackages = with pkgs; [
+      bashInteractive
+      coreutils
+      util-linux
+      iproute2
+      networkmanager
+      parted
+      gptfdisk
+      dosfstools
+      e2fsprogs
+      btrfs-progs
+      nixos-install-tools
       git
       curl
       foot
+      mesa
+      libglvnd
+      hitechInstaller
+      # Kept for the installer pipeline and live debugging.
       sudo
-      nixos-install-tools
       nix
-      coreutils
-      networkmanager
-      util-linux
-      iproute2
-      parted
-      e2fsprogs
-      dosfstools
       efibootmgr
       efivar
       kmod
       hwdata
       pciutils
       usbutils
-    ]);
+    ];
 
     # --- Deliberate size reductions --------------------------------------
     # The stock installation-cd base is built for every possible machine:
@@ -231,9 +258,9 @@ in
       "loop"
     ];
 
-    # Equivalent of profiles/minimal.nix; we do not import that profile directly
-    # because installation-cd-base already imports profiles/base.nix.
-    environment.defaultPackages = lib.mkForce [ ];
+    # Keep the installation-cd base default packages (installation-cd-base
+    # sets this to [ rsync ]); do NOT force it empty. bash/coreutils are also
+    # explicit systemPackages above.
     programs.command-not-found.enable = lib.mkForce false;
     xdg.autostart.enable = lib.mkForce false;
     xdg.icons.enable = lib.mkForce false;
@@ -257,7 +284,27 @@ in
     # No hardcoded live password: the kiosk session is passwordless by design
     # and the operator identity is created exclusively by the GUI form.
     users.users.nixos.initialHashedPassword = lib.mkForce "";
-    users.users.nixos.extraGroups = [ "wheel" "networkmanager" ];
+    users.users.nixos.extraGroups = [
+      "wheel"
+      "networkmanager"
+      "video"
+      "render"
+      "input"
+      "tty"
+    ];
+
+    # Always keep a usable shell reachable: getty@tty2/tty3 autologin as the
+    # live user, and ttyS0 gets an explicit getty for serial/headless rescue.
+    services.getty.autologinUser = "nixos";
+    systemd.services."serial-getty@ttyS0" = {
+      enable = true;
+      wantedBy = [ "getty.target" ];
+      environment.TERM = "linux";
+      serviceConfig.ExecStart = [
+        ""
+        "${pkgs.util-linux}/bin/agetty --autologin nixos --login-program ${pkgs.shadow}/bin/login --noclear --keep-baud ttyS0 115200,38400,9600 linux"
+      ];
+    };
 
     # eframe/egui + Mesa are much smaller than the old Calamares/Qt/KDE stack,
     # but xz still compresses this closure noticeably better than zstd-19 at
