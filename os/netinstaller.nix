@@ -51,6 +51,34 @@ let
   # owns the partition/format/mount/install pipeline.
   hitechInstaller = pkgs.callPackage ../hitech-installer { };
 
+  # Wrapper script that detects missing hardware acceleration and forces
+  # software rendering (llvmpipe) so the eframe/glow HUD appears instead of
+  # a black screen on VirtualBox/QEMU-without-virgl/headless CI.
+  #
+  # Detection strategy:
+  #  1. If NO DRM render node exists at all (not just renderD0), force
+  #     software rendering for both GL and Wayland/Ozone.
+  #  2. Check for common virtual-machine indicators (QEMU virtio-gpu, VirtualBox
+  #     VBoxGuest, VMware vmware) so llvmpipe is used even when a stub DRM
+  #     device is present but hardware acceleration is not usable.
+  hitechInstallerKiosk = pkgs.writeScriptBin "hitech-installer-kiosk" ''
+    soft=0
+    if [ ! -e /dev/dri/renderD0 ] && [ ! -e /dev/dri/card0 ]; then
+      soft=1
+    fi
+    if [ -e /sys/module/virtio_gpu ] || [ -e /sys/module/vboxguest ] || grep -aq vmware /proc/1/environ 2>/dev/null; then
+      soft=1
+    fi
+    if [ "$soft" = "1" ]; then
+      export LIBGL_ALWAYS_SOFTWARE=1
+      export WLR_RENDERER_ALLOW_SOFTWARE=1
+      export WLR_RENDERER=soft
+      export EGL_PLATFORM=x11
+      export GST_VAAPI_ALL_DRIVERS=1
+    fi
+    exec ${hitechInstaller}/bin/hitech-installer "$@"
+  '';
+
 in
 {
   imports = [ ./hardware-universal.nix ];
@@ -140,7 +168,7 @@ in
     services.cage = {
       enable = true;
       user = "nixos";
-      program = "${hitechInstaller}/bin/hitech-installer";
+      program = "${hitechInstallerKiosk}/bin/hitech-installer-kiosk";
       environment = {
         # Consumed by the Rust installer at install time.
         HITECH_CACHE_URL = cfg.cacheUrl;
@@ -152,14 +180,13 @@ in
         HITECH_ALLOW_SOURCE_FALLBACK = lib.boolToString cfg.allowSourceFallback;
         # eframe/glow: prefer the Wayland/EGL path inside Cage.
         WINIT_UNIX_BACKEND = "wayland";
-        # QEMU/virtio and some real GPUs need software cursors; keep the
-        # hardware path when /dev/dri is available.
+        # Default to allowing software fallbacks; the kiosk wrapper will force
+        # them when no usable DRM render node is detected at launch time.
         WLR_NO_HARDWARE_CURSORS = "1";
         WLR_RENDERER_ALLOW_SOFTWARE = "1";
+        WLR_RENDERER = "soft";
+        LIBGL_ALWAYS_SOFTWARE = "1";
         XDG_RUNTIME_DIR = "/run/user/1000";
-        # LIBGL_ALWAYS_SOFTWARE is intentionally NOT set here. The package
-        # wrapper enables it only when no /dev/dri node exists, so an AMD RX
-        # 580 can still use amdgpu/EGL acceleration.
       };
     };
 

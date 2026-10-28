@@ -446,11 +446,11 @@ fn install_steps(req: &InstallRequest, state: &Arc<Mutex<InstallStatus>>) -> Res
     run_checked(state, "nixos-generate-config", &["--root", "/mnt"])?;
 
     set_status(state, 28, "Fetching the pinned HiTech-OS profile…");
-    let has_repo = fetch_profile(state)?;
+    fetch_profile(state)?;
 
     set_status(state, 34, "Writing target identity and desktop configuration…");
     let hash = hash_password(&req.password)?;
-    let config = target_config(req, &hash, has_repo);
+    let config = target_config(req, &hash);
     root_mkdir(state, "/mnt/etc/nixos")?;
     root_write(state, "/mnt/etc/nixos/configuration.nix", &config)?;
 
@@ -578,11 +578,11 @@ fn unmount_path(path: &str, state: &Arc<Mutex<InstallStatus>>) {
     }
 }
 
-fn fetch_profile(state: &Arc<Mutex<InstallStatus>>) -> Result<bool, String> {
+fn fetch_profile(state: &Arc<Mutex<InstallStatus>>) -> Result<(), String> {
     let url = env::var("HITECH_REPO_URL").unwrap_or_default();
     if url.trim().is_empty() {
         append_log(state, "HITECH_REPO_URL is empty; installing a generic NixOS profile.");
-        return Ok(false);
+        return Ok(());
     }
     let dest = "/mnt/etc/nixos/hitech-os";
     if Path::new(dest).exists() {
@@ -598,7 +598,7 @@ fn fetch_profile(state: &Arc<Mutex<InstallStatus>>) -> Result<bool, String> {
     args.push(url.trim());
     args.push(dest);
     run_checked(state, "git", &args)?;
-    Ok(Path::new(dest).join("os/installation.nix").exists())
+    Ok(())
 }
 
 fn hash_password(password: &str) -> Result<String, String> {
@@ -613,51 +613,47 @@ fn hash_password(password: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-fn target_config(req: &InstallRequest, password_hash: &str, has_repo: bool) -> String {
+fn target_config(req: &InstallRequest, password_hash: &str) -> String {
     let mut s = String::new();
-    s.push_str("{ config, pkgs, lib, ... }:\n\n{\n  imports = [\n    ./hardware-configuration.nix\n");
-    if has_repo {
-        s.push_str("    ./hitech-os/os/installation.nix\n");
-    }
-    s.push_str("  ];\n\n");
+    s.push_str("{ config, pkgs, lib, ... }:\n\n{\n  imports = [\n    ./hardware-configuration.nix\n    ./hitech-os/os/installation.nix\n  ];\n\n");
     s.push_str(&format!("  networking.hostName = {};\n", nix_escape(&req.hostname)));
     s.push_str("  networking.networkmanager.enable = true;\n");
     s.push_str("  time.timeZone = \"UTC\";\n");
     s.push_str(&format!("  users.users.{} = {{\n", nix_escape(&req.username)));
     s.push_str("    isNormalUser = true;\n");
-    s.push_str(&format!("    description = {};\n", nix_escape(&req.username)));
-    s.push_str("    extraGroups = [ \"wheel\" \"networkmanager\" \"video\" \"render\" \"input\" ];\n");
+    s.push_str(&format!("    description = {};\n", nix_escape(&req.username)));    s.push_str("    extraGroups = [ \"wheel\" \"networkmanager\" \"video\" \"render\" \"input\" ];\n");
     s.push_str(&format!("    initialHashedPassword = {};\n", nix_escape(password_hash)));
-    s.push_str("  };\n");
-    s.push_str("  security.sudo.wheelNeedsPassword = true;\n");
-    s.push_str("  security.polkit.enable = true;\n");
-    s.push_str("  services.udisks2.enable = true;\n");
-    s.push_str("  services.libinput.enable = true;\n");
-    s.push_str("  services.xserver.enable = true;\n");
-    s.push_str("  boot.loader.systemd-boot.enable = true;\n");
-    s.push_str("  boot.loader.efi.canTouchEfiVariables = true;\n");
-    s.push_str(&format!("  system.stateVersion = {};\n", nix_escape(&env::var("HITECH_STATE_VERSION").unwrap_or_else(|_| "25.11".to_string()))));
-    s.push_str("  nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ]; \n");
-    match req.desktop.as_str() {
-        "orion" => {
-            s.push_str("  services.displayManager.sddm.enable = true;\n");
-            s.push_str("  services.displayManager.sddm.wayland.enable = true;\n");
+            s.push_str("  };\n");
+            s.push_str("  security.sudo.wheelNeedsPassword = true;\n");
+            s.push_str("  security.polkit.enable = true;\n");
+            s.push_str("  services.udisks2.enable = true;\n");
+            s.push_str("  services.libinput.enable = true;\n");
+            s.push_str("  services.xserver.enable = true;\n");
+            s.push_str("  boot.loader.systemd-boot.enable = true;\n");
+            s.push_str("  boot.loader.efi.canTouchEfiVariables = true;\n");
+            s.push_str(&format!("  system.stateVersion = {};\n", nix_escape(&env::var("HITECH_STATE_VERSION").unwrap_or_else(|_| "25.11".to_string()))));
+            s.push_str("  nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];\n");
+            s.push_str("\n  # HiTech-Shell: always enabled when Orion desktop is selected.\n");
             s.push_str("  services.hitech-shell.enable = true;\n");
-        }
-        "plasma6" => {
-            s.push_str("  services.desktopManager.plasma6.enable = true;\n");
-            s.push_str("  services.displayManager.sddm.enable = true;\n");
-        }
-        "gnome" => {
-            s.push_str("  services.desktopManager.gnome.enable = true;\n");
-            s.push_str("  services.displayManager.gdm.enable = true;\n");
-        }
-        "xfce" => {
-            s.push_str("  services.xserver.desktopManager.xfce.enable = true;\n");
-            s.push_str("  services.xserver.displayManager.lightdm.enable = true;\n");
-        }
-        _ => {}
-    }
+            match req.desktop.as_str() {
+                "orion" => {
+                    s.push_str("  services.displayManager.sddm.enable = true;\n");
+                    s.push_str("  services.displayManager.sddm.wayland.enable = true;\n");
+                }
+                "plasma6" => {
+                    s.push_str("  services.desktopManager.plasma6.enable = true;\n");
+                    s.push_str("  services.displayManager.sddm.enable = true;\n");
+                }
+                "gnome" => {
+                    s.push_str("  services.desktopManager.gnome.enable = true;\n");
+                    s.push_str("  services.displayManager.gdm.enable = true;\n");
+                }
+                "xfce" => {
+                    s.push_str("  services.xserver.desktopManager.xfce.enable = true;\n");
+                    s.push_str("  services.xserver.displayManager.lightdm.enable = true;\n");
+                }
+                _ => {}
+            }
     s.push_str("}\n");
     s
 }
@@ -825,6 +821,8 @@ fn launch_browser(url: &str) -> Result<(), String> {
             cmd.arg("--password-store=basic")
                 .arg("--no-first-run")
                 .arg("--no-default-browser-check")
+                .arg("--disable-gpu")
+                .env("LIBGL_ALWAYS_SOFTWARE", "1")
                 .arg("--disable-dev-shm-usage")
                 .arg("--window-size=1920,1080");
             if wayland { cmd.arg("--ozone-platform=wayland"); }

@@ -110,8 +110,18 @@ rustPlatform.buildRustPackage {
         ]
       }" \
       --run '
-        if [ ! -e /dev/dri/card0 ] && [ ! -e /dev/dri/renderD128 ]; then
+        soft=0
+        if [ ! -e /dev/dri/renderD0 ] && [ ! -e /dev/dri/card0 ]; then
+          soft=1
+        fi
+        if [ -e /sys/module/virtio_gpu ] || [ -e /sys/module/vboxguest ]; then
+          soft=1
+        fi
+        if [ "$soft" = "1" ]; then
           export LIBGL_ALWAYS_SOFTWARE=1
+          export WLR_RENDERER_ALLOW_SOFTWARE=1
+          export WLR_RENDERER=soft
+          export EGL_PLATFORM=x11
         fi
       '
   '';

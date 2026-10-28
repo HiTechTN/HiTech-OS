@@ -95,6 +95,10 @@ in
   services.gvfs.enable = lib.mkForce false;
 
   # Doc embarquée pour un accès hors-ligne (menu "HiTech-OS — Documentation")
+  # Bundle the full HiTech-OS source tree inside the ISO so the Calamares
+  # installer can copy it to the target and import os/installation.nix
+  # before nixos-install runs (no network/git needed at install time).
+  environment.etc."hitech-os-source".source = ../.;
   environment.etc."hitechos/ROADMAP.md".source = ../docs/ROADMAP.md;
   environment.systemPackages = [
     pkgs.gnome-software
@@ -103,6 +107,7 @@ in
     hitechosDocsItem
     hitechInstallerDesktop
     hitechInstallerAutostart
+    hitechInstaller # binaire pour que l'installeur soit dans /run/current-system/sw/bin/
   ];
 
   # --- Flatpak, préconfiguré avec Flathub (pas de remote-add manuel) ---

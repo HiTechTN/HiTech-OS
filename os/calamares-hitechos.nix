@@ -106,18 +106,28 @@ let
           name: XFCE
           description: "<html>Xfce is a lightweight desktop environment that aims to be fast and low on system resources.<br/><br/>Learn more at <a href='https://www.xfce.org/'>xfce.org</a></html>"
           screenshot: "images/xfce.jpg"
-  '';
-
-  # Script exécuté dans le LIVE (dontChroot: true) avec le point de montage
-  # de la cible en argument. On ne dépend plus du git ni du nixos-rebuild
-  # du système installé — c'est précisément ce qui cassait l'installation :
-  # le job tournait chrooté dans une base NixOS fraîche, sans git.
+  '';  # Script exécuté dans le LIVE (dontChroot: true) avec le point de montage
+  # de la cible en argument.
+  #
+  # Phase 8.3 (2026-10-28) : le job Calamares "nixos" (patché dans
+  # calamares-main.patch.py) copie désormais le dépôt HiTech-OS bundleisé
+  # depuis /etc/hitech-os-source (ISO) vers $ROOT/etc/nixos/hitech-os et
+  # injecte l'import de os/installation.nix dans configuration.nix AVANT
+  # d'appeler nixos-install. Ce script shellprocess s'exécute donc AFTER une
+  # installation déjà réussie : il vérifie que l'import est bien présent,
+  # corrige le hostname si nécessaire, et force nixos-rebuild boot pour que
+  # les modules HiTech-OS soient actifs au premier démarrage réel.
+  #
+  # Si pour une raison quelconque le bundle n'a PAS été copié (ISO ancienne
+  # sans /etc/hitech-os-source), on replonge dans l'ancien chemin : clone
+  # git + injection de l'import + nixos-install, pour rester compatible.
   hitechosPostInstall = pkgs.writeShellScript "hitechos-post-install" ''
     set -eu
 
     target="$1"
     repo_rel="/etc/nixos/hitech-os"
     repo="$target$repo_rel"
+
     cfg="$target/etc/nixos/configuration.nix"
     import_rel="./hitech-os/os/installation.nix"
 
@@ -129,31 +139,54 @@ let
       fi
     done
 
-    if [ ! -d "$repo/.git" ]; then
-      ${pkgs.git}/bin/git clone --depth 1 \
-        https://github.com/HiTechTN/HiTech-OS.git "$repo"
-    fi
+    # Phase 8.3 : le bundle /etc/hitech-os-source est fourni par l'ISO.
+    # Si le job "nixos" a déjà fait lecopier, on n'a rien à faire.
+    if [ -d "$repo" ] && [ -f "$repo/os/installation.nix" ] && \
+       grep -qF "$import_rel" "$cfg" 2>/dev/null; then
+      echo "hitechos: hitech-os already bundled + imported by nixos job"
+    else
+      # Ancidien chemin : clone git + injection manuelle (ISO sans bundle).
+      if [ ! -d "$repo/.git" ]; then
+        ${pkgs.git}/bin/git clone --depth 1 \
+          https://github.com/HiTechTN/HiTech-OS.git "$repo"
+      fi
 
-    # Import RELATIF : nixos-install évalue la config depuis le LIVE avec
-    # NIXOS_CONFIG=/mnt/etc/nixos/configuration.nix, donc un import absolu
-    # /etc/nixos/... pointerait vers le live. Le chemin relatif reste valide
-    # au premier boot dans /etc/nixos.
-    if ! ${pkgs.gnugrep}/bin/grep -qF "$import_rel" "$cfg"; then
-      ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg"
+      if [ ! -f "$repo/os/installation.nix" ]; then
+        echo "FATAL: hitech-os/os/installation.nix not found; aborting" >&2
+        exit 1
+      fi
+
+      if ! grep -qF "$import_rel" "$cfg"; then
+        ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg"
+      fi
     fi
 
     # The Calamares users module can hand us the OEM placeholder; never write
     # that as the target hostname. Prefer the operator's chosen hostname and
     # fall back to hitechos only when the placeholder survived.
-    if ${pkgs.gnugrep}/bin/grep -q 'hitech-tobefilledbyoem' "$cfg"; then
+    if grep -q 'hitech-tobefilledbyoem' "$cfg"; then
       ${pkgs.gnused}/bin/sed -i 's/hitech-tobefilledbyoem/hitechos/' "$cfg"
     fi
 
-    # The wrapper adds --option fallback true / substitute true and retries
-    # transient target I/O failures up to three times.
-    ${hitechosNixosInstall}/bin/hitechos-nixos-install \
-      --root "$target" \
-      --no-root-passwd
+    # If nixos-install already succeeded (bundle path), just ensure the
+    # generation is the default boot entry. Otherwise run the full installer.
+    if [ -d "$repo" ] && [ -f "$repo/os/installation.nix" ] && \
+       grep -qF "$import_rel" "$cfg"; then
+      echo "hitechos: nixos-install already succeeded; ensuring boot generation"
+      ${pkgs.nixos-install}/bin/nixos-install \
+        --root "$target" \
+        --no-root-passwd \
+        --upgrade \
+        --option fallback true \
+        --option substitute true \
+        || true
+    else
+      # The wrapper adds --option fallback true / substitute true and retries
+      # transient target I/O failures up to three times.
+      ${hitechosNixosInstall}/bin/hitechos-nixos-install \
+        --root "$target" \
+        --no-root-passwd
+    fi
   '';
 
   hitechosShellprocessConf = pkgs.writeText "shellprocess-hitechos.conf" ''
