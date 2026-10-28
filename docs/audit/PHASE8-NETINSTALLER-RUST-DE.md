@@ -138,8 +138,8 @@ Chromium in kiosk/app mode.
 
 | Target | Size | Store path |
 |---|---|---|
-| NetInstaller | **2.0 GiB** (2 097 152 000 B) | `/nix/store/4kja6i8ic8iwlfx0ykcrp84z86d3d5mv-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié : <https://github.com/HiTechTN/HiTech-OS/releases/download/v3.0-orion-x/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso> |
-| Live (GNOME + Calamares) | **3.4 GiB** (3 546 349 568 B) | `/nix/store/z1bnj106kcfidk7a0r1xjv7wzjxfyj78-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié (scission 2 fichiers pour GitHub Releases) : <https://github.com/HiTechTN/HiTech-OS/releases/tag/v3.0-orion-x> — `nixos-live.iso.part00.iso.part` (1 992 294 400 B) + `nixos-live.iso.part01.iso.part` (1 554 055 168 B). Reassembly : `cat *.iso.part0*.iso.part > nixos-live.iso` |
+| NetInstaller | **2.0 GiB** (2 097 152 000 B) | `/nix/store/z49pxhp1q6vbnfdyb2f2p033p8x92s9y-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié : <https://github.com/HiTechTN/HiTech-OS/releases/download/v8.4.0-orion-x/netinstaller-new.iso.part00.iso.part> + <https://github.com/HiTechTN/HiTech-OS/releases/download/v8.4.0-orion-x/netinstaller-new.iso.part01.iso.part> (scission pour GitHub Releases). Reassembly : `cat netinstaller-new.iso.part0*.iso.part > hitechos-orion-x-netinstaller-x86_64.iso` |
+| Live (GNOME + Calamares) | **3.4 GiB** (3 486 036 568 B) | `/nix/store/zms1zlk039y1zzcrnnpcdxz67cwqgwxq-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié (scission 2 fichiers pour GitHub Releases) : <https://github.com/HiTechTN/HiTech-OS/releases/tag/v8.4.0-orion-x> — `live-new.iso.part00.iso.part` (1 992 294 400 B) + `live-new.iso.part01.iso.part` (1 554 055 168 B). Reassembly : `cat live-new.iso.part0*.iso.part > hitechos-orion-x-live-gnome-x86_64.iso` |
 
 Remaining bulk is genuine firmware and browser: `linux-firmware` 847 MB,
 `chromium-unwrapped` 736 MB, `llvm` libs + `mesa` 852 MB.
@@ -180,6 +180,57 @@ was. Both share the same three-attempt semantics.
   three-segment partition bar with the ESP auto-selected on a pre-partitioned
   ESP+ext4+NTFS disk.
 - QEMU Live ISO: GNOME boots and the cockpit autostarts on the desktop.
+
+### Bugs fixed in v8.4.0-orion-x (2026-10-28)
+
+#### 1. Cage/EGL/OpenGL black screen on virtual machines
+
+**Symptom**: Booting the NetInstaller ISO in VirtualBox or QEMU without hardware
+acceleration (no virtio-gpu, no VirGL) resulted in a black screen instead of the
+ORION-X HUD. `egui`/`glow` failed to initialize the EGL/OpenGL surface.
+
+**Root cause**: The kiosk wrapper and the `hitech-installer` binary wrapper only
+checked for the presence of `/dev/dri/renderD0` and `/dev/dri/card0`. Some VM
+configurations expose a stub DRM device but no usable hardware acceleration.
+
+**Fix**:
+- `os/netinstaller.nix` (`hitechInstallerKiosk` wrapper): detect missing DRM
+  render nodes AND VM indicators (`/sys/module/virtio_gpu`,
+  `/sys/module/vboxguest`, `vmware` in `/proc/1/environ`). When software
+  rendering is needed, export `LIBGL_ALWAYS_SOFTWARE=1`,
+  `WLR_RENDERER_ALLOW_SOFTWARE=1`, `WLR_RENDERER=soft`,
+  `EGL_PLATFORM=x11`, `GST_VAAPI_ALL_DRIVERS=1`.
+- `os/netinstaller.nix` (`services.cage.environment`): set
+  `WLR_RENDERER=soft` and `LIBGL_ALWAYS_SOFTWARE=1` as defaults so the
+  environment is safe even before the wrapper runs.
+- `hitech-installer/default.nix` (`wrapProgram` `--run`): same detection logic
+  in the binary wrapper so the HUD works outside Cage too.
+
+#### 2. Calamares `services.hitech-shell` option does not exist
+
+**Symptom**: Installing with the `orion` desktop option in Calamares failed with:
+```
+error: The option 'services.hitech-shell' does not exist.
+```
+
+**Root cause**: The Calamares `nixos` job ran `nixos-install` BEFORE the
+`shellprocess@hitechos` job cloned the HiTech-OS repo and added the
+`imports = [ ./hitech-os/os/installation.nix ]` line. The `configuration.nix`
+written by the patched `main.py` already contained
+`services.hitech-shell.enable = true;` (for the Orion desktop choice), but
+without the import, the option was undefined.
+
+**Fix**:
+- `os/iso.nix`: bundle the full HiTech-OS source tree inside the Live ISO at
+  `/etc/hitech-os-source` via `environment.etc."hitech-os-source".source`.
+- `os/calamares-main.patch.py`: inject Python code into the Calamares `nixos`
+  job's `main.py` that copies `/etc/hitech-os-source` to
+  `$ROOT/etc/nixos/hitech-os` and adds the `./hitech-os/os/installation.nix`
+  import to `configuration.nix` BEFORE calling `nixos-install`.
+- `os/calamares-hitechos.nix` (`hitechosPostInstall`): detect when the bundle
+  has already been copied by the `nixos` job and skip git clone; fall back to
+  the old git-clone path for ISOs built without the bundle (backward compatible).
+
 
 ---
 
