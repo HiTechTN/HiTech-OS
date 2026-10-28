@@ -814,9 +814,9 @@ fn launch_browser(url: &str) -> Result<(), String> {
             cmd.args(["--kiosk", url]);
         } else {
             if desktop_session {
-                // --app creates a chromeless window; the fullscreen flags are
-                // what make it fill the screen instead of opening 800x600.
-                cmd.arg(format!("--app={url}"))
+                // Fullscreen maximized window with --app for kiosk-style immersive,
+                // but window decorations remain via the session shell so Alt+Tab works.
+                cmd.arg("--app").arg(url)
                     .arg("--start-fullscreen")
                     .arg("--start-maximized");
             } else {

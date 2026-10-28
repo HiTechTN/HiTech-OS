@@ -1,7 +1,8 @@
 # Phase 8 — NetInstaller minimal + HiTech-Shell (Rust Wayland DE)
 
-Status: architecture + scaffold landed; 8.1 Rust GUI installer is built and boots in QEMU.
-Date: 2026-10-23 (updated 2026-10-27)
+Status: architecture + scaffold landed; 8.2 ORION-X cockpit installs end-to-end and the
+installed disk boots (verified in QEMU, UEFI).
+Date: 2026-10-23 (updated 2026-10-28)
 Repo: `github:HiTechTN/HiTech-OS`
 Base commit: `2053f58` (Phase 7) + Phase 8 working tree
 
@@ -77,6 +78,108 @@ Verified in QEMU (KVM, `-vga virtio`, `-serial stdio`):
 
 The older Calamares-specific sections below are retained as historical design
 notes; where they conflict with this addendum, this addendum wins.
+
+---
+
+## 0.2 Phase 8.2 addendum — ORION-X v3.0 cockpit (2026-10-28)
+
+The egui screen described in 0.1 is gone. `hitech-installer` is now an
+ORION-X “spaceship cockpit”: a TypeScript/HTML5/CSS3/SVG HUD served by a
+**std-only Rust HTTP backend** (`Cargo.toml` has zero dependencies), rendered by
+Chromium in kiosk/app mode.
+
+### Architecture
+
+- `hitech-installer/src/main.rs` — dependency-free TCP HTTP server on
+  `127.0.0.1:${HITECH_INSTALLER_PORT:-17870}`, static file serving from
+  `HITECH_WEB_ROOT`, a hand-written JSON reader for `lsblk -J`, and the whole
+  install pipeline (`/api/disks`, `/api/install`, `/api/status`, `/api/wifi`).
+- `hitech-installer/frontend/{index.html,styles.css,main.ts}` — bundled to
+  `main.js` by esbuild (`frontend.nix`) and installed to
+  `$out/share/hitech-installer/www`.
+- Renderer: Chromium `--kiosk` inside Cage (NetInstaller, no desktop shell) or
+  `--app=<url> --start-fullscreen --start-maximized` in a desktop session
+  (`XDG_CURRENT_DESKTOP` set, Live GNOME), so the cockpit fills the screen while
+  `Alt+Tab` still reaches the rest of the live desktop. Firefox `--kiosk` is the
+  fallback; `HITECH_BROWSER` overrides the candidate list.
+- The Live ISO ships `hitech-installer.desktop` (GNOME favourites) plus
+  `autostart-hitech-installer`; the NetInstaller runs it as the Cage program.
+
+### Bugs this phase fixed (all reproduced, then verified)
+
+1. **ISOs were unbootable above 4 GiB.** `os/hardware-universal.nix` staged
+   `amdgpu radeon i915 xe nouveau virtio_gpu` in `boot.initrd.kernelModules`.
+   That pulled every matching firmware blob: the initrd reached **1.44 GiB** and
+   ISOLINUX failed with `Loading initrd...failed: Invalid argument` /
+   `Booting kernel failed: Invalid argument` (BIOS cannot address files past the
+   4 GiB mark). The GPU drivers now live only in `boot.kernelModules` and are
+   loaded by udev at stage 2. Measured effect: NetInstaller 4.6 GiB → 2.0 GiB,
+   Live ISO 6.0 GiB → 3.4 GiB.
+2. **Privilege escalation.** The backend called `wipefs`/`mkfs`/`mount`/
+   `nixos-install` and wrote into `/mnt` while running as the unprivileged live
+   user, so a real install could never have worked. Every privileged command and
+   target-file write now goes through `sudo -n --` when `geteuid() != 0`.
+3. **`system.stateVersion` aborted every install.** `os/common.nix` defined it
+   as a plain value; the generated `/etc/nixos/configuration.nix` states the
+   release it installed, so NixOS refused to evaluate:
+   `The option 'system.stateVersion' has conflicting definition values`. Found by
+   the end-to-end test. `common.nix` now only *defaults* it, and `os/iso.nix`
+   pins the live image's own release with `lib.mkForce` because
+   `installation-cd-base` already defaults it to `lib.trivial.release`.
+4. **Arabic BiDi.** Device paths and sizes were reordered by the RTL paragraph
+   direction (`476.9 GiB` rendered as `GIB 476.9`, `/dev/nvme0n1p1 — vfat —
+   100.0 MiB` mangled). Technical tokens are now isolated with `.tech`
+   (`direction: ltr; unicode-bidi: isolate`) in the DOM and U+2066/U+2069
+   (LRI/PDI) inside `<option>` labels.
+5. **EFI partitions offered as root.** `rootParts` filters `is_efi`, so a safe
+   dual-boot can never format the ESP.
+
+### Artefacts (measured 2026-10-28)
+
+| Target | Size | Store path |
+|---|---|---|
+| NetInstaller | **2.0 GiB** (2 097 152 000 B) | `/nix/store/4kja6i8ic8iwlfx0ykcrp84z86d3d5mv-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso` |
+| Live (GNOME + Calamares) | **3.4 GiB** (3 546 349 568 B) | `/nix/store/q32xbfdakzxmv70q5mhg6ph7yjv03zcv-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso` |
+
+Remaining bulk is genuine firmware and browser: `linux-firmware` 847 MB,
+`chromium-unwrapped` 736 MB, `llvm` libs + `mesa` 852 MB.
+
+### End-to-end verification (QEMU, UEFI via OVMF)
+
+- 25 GiB qcow2, NetInstaller ISO, `-device virtio-vga`; the install was driven
+  through the backend API:
+  `POST /api/install mode=erase disk=/dev/vda desktop=orion hostname=hitech-ship
+  username=commander`.
+- Partitioning/format/mount succeeded: `/dev/vda1` 512 MiB vfat `HITECH-EFI`,
+  `/dev/vda2` 24.5 GiB ext4 `nixos`.
+- `nixos-install` ran with `--no-root-passwd --option fallback true --option
+  substitute true` and finished **exit 0** on attempt 1; the API reported
+  `progress=100 success=true`.
+- The disk was then booted **without the ISO** under the same NVRAM: systemd-boot
+  (`EFI/systemd/systemd-bootx64.efi`, `EFI/BOOT/BOOTX64.EFI`, a loader entry with
+  kernel + initrd) reached the SDDM login screen of the **HiTech Shell** session
+  listing user **COMMANDER**.
+- On-disk identity, read back from the image:
+  `/etc/nixos/configuration.nix` → `networking.hostName = "hitech-ship"`,
+  `users.users."commander"` with a SHA-512 `initialHashedPassword`, Orion desktop
+  block (`sddm` + `hitech-shell`), `system.stateVersion = "26.11"`;
+  generation `nixos-system-hitech-ship-26.11pre-git`.
+
+The CLI-side retry wrapper (`hitechos-nixos-install`) and the Calamares
+`shellprocess@hitechos` path were not exercised by this run — the cockpit path
+was. Both share the same three-attempt semantics.
+
+### UI verification
+
+- Browser (Playwright, against the packaged assets): four desktop cards, five
+  real disks with no `0 B`/loop/zram entries, proportional colour-coded
+  partition bar, both partition modes, GParted/Refresh, EN/FR/AR switch with
+  `dir=rtl`, zero JS errors — all assertions pass.
+- QEMU NetInstaller, `-vga virtio` 1920x1080: cockpit fullscreen in Cage, AR
+  switch (mirrored RTL), FR configuration deck, desktop chooser, and a
+  three-segment partition bar with the ESP auto-selected on a pre-partitioned
+  ESP+ext4+NTFS disk.
+- QEMU Live ISO: GNOME boots and the cockpit autostarts on the desktop.
 
 ---
 
