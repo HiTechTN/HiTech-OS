@@ -21,6 +21,7 @@
 {
   imports = [
     ./common.nix
+    ./hardware-universal.nix
     ./ecosystem.nix
     ./services/hitech-store.nix
     ./services/genio.nix

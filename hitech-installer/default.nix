@@ -1,5 +1,6 @@
 {
   lib,
+  pkgs,
   rustPlatform,
   pkg-config,
   makeWrapper,
@@ -15,6 +16,9 @@
   git,
   foot,
   nix,
+  chromium,
+  mkpasswd,
+  openssl,
   mesa,
   libglvnd,
   libGL,
@@ -26,6 +30,9 @@
   libxrandr,
 }:
 
+let
+  frontend = pkgs.callPackage ./frontend.nix { };
+in
 rustPlatform.buildRustPackage {
   pname = "hitech-installer";
   version = "2.0.0";
@@ -65,6 +72,9 @@ rustPlatform.buildRustPackage {
   # not depend on the systemd service's minimal PATH. /run/wrappers/bin makes
   # the setuid sudo wrapper discoverable without pinning a non-setuid package.
   postInstall = ''
+    mkdir -p "$out/share/hitech-installer/www"
+    cp -r ${frontend}/. "$out/share/hitech-installer/www/"
+
     wrapProgram "$out/bin/hitech-installer" \
       --prefix PATH : "${
         lib.makeBinPath [
@@ -80,8 +90,12 @@ rustPlatform.buildRustPackage {
           git
           foot
           nix
+          chromium
+          mkpasswd
+          openssl
         ]
       }:/run/wrappers/bin" \
+      --set HITECH_WEB_ROOT "$out/share/hitech-installer/www" \
       --prefix LD_LIBRARY_PATH : "${
         lib.makeLibraryPath [
           libGL
@@ -106,7 +120,7 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   meta = with lib; {
-    description = "HiTech-OS Cybernetic OS Studio graphical installer (eframe/egui)";
+    description = "HiTech-OS ORION-X Spaceship Cockpit installer (Rust core + TypeScript HUD)";
     mainProgram = "hitech-installer";
     platforms = platforms.linux;
   };

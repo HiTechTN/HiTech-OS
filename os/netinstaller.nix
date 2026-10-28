@@ -51,17 +51,10 @@ let
   # owns the partition/format/mount/install pipeline.
   hitechInstaller = pkgs.callPackage ../hitech-installer { };
 
-  # amdgpu needs matching firmware before the kernel can initialise Polaris
-  # (RX 580). linux-firmware is ~1.9 GiB; copy only the 90 MiB amdgpu subset so
-  # the firmware is available in stage-1 without ballooning the ISO. Symlinks
-  # inside the directory are relative, so cp -a keeps them valid.
-  amdgpuFirmware = pkgs.runCommandLocal "amdgpu-firmware" { } ''
-    mkdir -p $out/lib/firmware
-    cp -a ${pkgs.linux-firmware}/lib/firmware/amdgpu $out/lib/firmware/
-  '';
-
 in
 {
+  imports = [ ./hardware-universal.nix ];
+
   options.hitechos.netinstaller = {
     enable = lib.mkOption {
       type = lib.types.bool;
@@ -176,8 +169,7 @@ in
     # virtio_gpu are loaded early so both the RX 580 and QEMU virtio-vga have a
     # DRM device by the time Cage starts.
     hardware.graphics.enable = true;
-    boot.initrd.kernelModules = [ "amdgpu" "virtio_gpu" ];
-    hardware.firmware = [ amdgpuFirmware ];
+    # GPU modules/firmware are provided by hardware-universal.nix.
     security.polkit.enable = true;
 
     # The GUI runs as the unprivileged live `nixos` user and escalates only the
@@ -226,8 +218,8 @@ in
     # initrd storage/USB modules) is the supported live networking path.
     system.installer.channel.enable = false;
     system.extraDependencies = lib.mkForce [ ];
-    hardware.enableAllHardware = lib.mkForce false;
-    hardware.enableRedistributableFirmware = lib.mkForce false;
+    # hardware-enableAllFirmware / vendor blobs are enabled by
+    # hardware-universal.nix; do not force them off here.
     boot.swraid.enable = lib.mkForce false;
     services.openssh.enable = lib.mkForce false;
     boot.supportedFilesystems.zfs = lib.mkForce false;

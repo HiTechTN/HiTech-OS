@@ -51,6 +51,63 @@
 { pkgs, ... }:
 
 let
+  # nixos-install retry wrapper used by both the stock Calamares job (through
+  # the patched main.py) and our post-install shellprocess. This is the
+  # defence against transient squashfs I/O errors and cache/network flakes.
+  hitechosNixosInstall = pkgs.writeShellScriptBin "hitechos-nixos-install" ''
+    set -u
+    attempt=1
+    status=1
+    while [ "$attempt" -le 3 ]; do
+      echo "hitechos: nixos-install attempt $attempt/3" >&2
+      ${pkgs.nixos-install}/bin/nixos-install \
+        --option fallback true \
+        --option substitute true \
+        "$@"
+      status=$?
+      if [ "$status" -eq 0 ]; then
+        exit 0
+      fi
+      echo "hitechos: nixos-install failed (exit $status); retrying after 4s" >&2
+      attempt=$((attempt + 1))
+      sleep 4
+    done
+    exit "$status"
+  '';
+
+  # Orion appears alongside the stock desktop choices. The stock NixOS job
+  # learns about the id in calamares-main.patch.py.
+  hitechosPackagechooserConf = pkgs.writeText "packagechooser.conf" ''
+    mode: required
+    method: legacy
+    labels:
+        step: "Desktop"
+    default: orion
+    items:
+        - id: orion
+          packages: []
+          name: Orion
+          description: "<html>Orion is the HiTech-OS cockpit shell: a focused, neon HUD built on the HiTech service stack.<br/><br/>Choose it for the full ORION-X experience.</html>"
+
+        - id: gnome
+          packages: [ gnome ]
+          name: GNOME
+          description: "<html>Every part of GNOME has been designed to make it simple and easy to use.<br/><br/>Learn more at <a href='https://www.gnome.org/'>gnome.org</a></html>"
+          screenshot: "images/gnome.jpg"
+
+        - id: plasma6
+          packages: [ plasma6 ]
+          name: KDE Plasma 6
+          description: "<html>Plasma is a highly customizable, modern Qt workspace that stays out of the way.<br/><br/>Learn more at <a href='https://kde.org/plasma-desktop/'>kde.org/plasma-desktop</a></html>"
+          screenshot: "images/plasma6.jpg"
+
+        - id: xfce
+          packages: [ xfce ]
+          name: XFCE
+          description: "<html>Xfce is a lightweight desktop environment that aims to be fast and low on system resources.<br/><br/>Learn more at <a href='https://www.xfce.org/'>xfce.org</a></html>"
+          screenshot: "images/xfce.jpg"
+  '';
+
   # Script exécuté dans le LIVE (dontChroot: true) avec le point de montage
   # de la cible en argument. On ne dépend plus du git ni du nixos-rebuild
   # du système installé — c'est précisément ce qui cassait l'installation :
@@ -64,6 +121,14 @@ let
     cfg="$target/etc/nixos/configuration.nix"
     import_rel="./hitech-os/os/installation.nix"
 
+    # UDisks2/GVFS must not keep a target partition busy while Calamares is
+    # mounting it. Only live media paths are touched; never the live root.
+    for mount in /run/media/* /media/*; do
+      if [ -d "$mount" ] && mountpoint -q "$mount"; then
+        umount -l "$mount" || true
+      fi
+    done
+
     if [ ! -d "$repo/.git" ]; then
       ${pkgs.git}/bin/git clone --depth 1 \
         https://github.com/HiTechTN/HiTech-OS.git "$repo"
@@ -73,18 +138,22 @@ let
     # NIXOS_CONFIG=/mnt/etc/nixos/configuration.nix, donc un import absolu
     # /etc/nixos/... pointerait vers le live. Le chemin relatif reste valide
     # au premier boot dans /etc/nixos.
-    # N'ajouter l'import qu'une seule fois (idempotent en cas de reprise).
     if ! ${pkgs.gnugrep}/bin/grep -qF "$import_rel" "$cfg"; then
       ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg"
     fi
 
-    # nixos-install s'exécute depuis le LIVE, cible montée sous $target :
-    # aucun binaire de la cible n'est requis, et le bootloader est réinstallé
-    # proprement avec le profil HiTech-OS.
-    ${pkgs.nixos-install}/bin/nixos-install \
+    # The Calamares users module can hand us the OEM placeholder; never write
+    # that as the target hostname. Prefer the operator's chosen hostname and
+    # fall back to hitechos only when the placeholder survived.
+    if ${pkgs.gnugrep}/bin/grep -q 'hitech-tobefilledbyoem' "$cfg"; then
+      ${pkgs.gnused}/bin/sed -i 's/hitech-tobefilledbyoem/hitechos/' "$cfg"
+    fi
+
+    # The wrapper adds --option fallback true / substitute true and retries
+    # transient target I/O failures up to three times.
+    ${hitechosNixosInstall}/bin/hitechos-nixos-install \
       --root "$target" \
-      --no-root-passwd \
-      --option extra-experimental-features 'nix-command flakes'
+      --no-root-passwd
   '';
 
   hitechosShellprocessConf = pkgs.writeText "shellprocess-hitechos.conf" ''
@@ -327,7 +396,11 @@ let
   calamaresExtensionsHitechos = pkgs.calamares-nixos-extensions.overrideAttrs (old: {
     postInstall = (old.postInstall or "") + ''
       cp ${hitechosShellprocessConf} $out/etc/calamares/modules/shellprocess-hitechos.conf
+      cp ${hitechosPackagechooserConf} $out/etc/calamares/modules/packagechooser.conf
       cp ${hitechosSettingsConf} $out/etc/calamares/settings.conf
+      ${pkgs.python3}/bin/python3 ${./calamares-main.patch.py} \
+        $out/lib/calamares/modules/nixos/main.py \
+        ${hitechosNixosInstall}/bin/hitechos-nixos-install
       # CRITIQUE : notre cp ci-dessus écrase settings.conf APRÈS que le
       # postInstall d'origine ait déjà fait
       # `substituteInPlace ... --replace-fail @out@ $out`. Notre copie
@@ -344,13 +417,8 @@ let
     calamares-nixos-extensions = calamaresExtensionsHitechos;
   };
 
-  # Lance Calamares automatiquement à l'ouverture de session GNOME —
-  # transcrit de calamares.nix, avec notre paquet patché à la place du
-  # stock (pkgs.calamares-nixos).
-  calamaresAutostart = pkgs.makeAutostartItem {
-    name = "calamares";
-    package = calamaresNixosHitechos;
-  };
+  # Calamares remains available from the desktop/application menu, but the
+  # ORION-X installer is the automatic welcome screen.
 in
 {
   # --- Section équivalente à installation-cd-graphical-calamares.nix ---
@@ -359,7 +427,7 @@ in
   programs.partition-manager.enable = true;
   environment.systemPackages = [
     calamaresNixosHitechos
-    calamaresAutostart
+    hitechosNixosInstall
     pkgs.glibcLocales
   ];
   i18n.supportedLocales = [ "all" ];
@@ -370,7 +438,7 @@ in
   services.desktopManager.gnome = {
     favoriteAppsOverride = ''
       [org.gnome.shell]
-      favorite-apps=[ 'firefox.desktop', 'nixos-manual.desktop', 'org.gnome.Console.desktop', 'org.gnome.Nautilus.desktop', 'gparted.desktop', 'calamares.desktop', 'org.gnome.Software.desktop' ]
+      favorite-apps=[ 'firefox.desktop', 'nixos-manual.desktop', 'org.gnome.Console.desktop', 'org.gnome.Nautilus.desktop', 'gparted.desktop', 'hitech-installer.desktop', 'calamares.desktop', 'org.gnome.Software.desktop' ]
     '';
     extraGSettingsOverrides = ''
       [org.gnome.shell]

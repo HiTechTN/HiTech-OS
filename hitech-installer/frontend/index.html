@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>HITECH-OS // ORION-X SPACESHIP COCKPIT</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="space" aria-hidden="true">
+    <div class="nebula nebula-a"></div>
+    <div class="nebula nebula-b"></div>
+    <div class="starfield"></div>
+    <div class="grid-horizon"></div>
+  </div>
+
+  <div class="shell">
+    <aside class="rail">
+      <div class="rail-mark">H//OS</div>
+      <div class="rail-line"></div>
+      <div class="rail-steps" aria-hidden="true">
+        <span class="rail-dot active"></span>
+        <span class="rail-dot"></span>
+        <span class="rail-dot"></span>
+        <span class="rail-dot"></span>
+      </div>
+      <div class="rail-label">ORION-X<br />DECK 01</div>
+      <button class="rail-action" id="terminalBtn" data-i18n="terminal">Terminal</button>
+      <button class="rail-action danger" id="rebootBtn" data-i18n="reboot">Reboot</button>
+      <div class="rail-status"><span class="pulse"></span><span data-i18n="systemOnline">System online</span></div>
+    </aside>
+
+    <main class="cockpit" id="cockpit">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow" data-i18n="brandTag">HITECH-OS // INSTALLATION VESSEL</div>
+          <h1 class="brand">ORION-X <span>SPACESHIP</span></h1>
+        </div>
+        <div class="topbar-right">
+          <div class="lang-switch" aria-label="Language">
+            <button class="lang active" data-lang="en">EN</button>
+            <button class="lang" data-lang="fr">FR</button>
+            <button class="lang" data-lang="ar">AR</button>
+          </div>
+          <div class="mission-clock" id="missionClock">--:--:--</div>
+        </div>
+      </header>
+
+      <section class="hero" id="hero">
+        <div class="hero-copy">
+          <div class="kicker" data-i18n="welcomeKicker">FLIGHT CONTROL // INSTALLER READY</div>
+          <h2 data-i18n="welcomeTitle">Chart a new system.</h2>
+          <p data-i18n="welcomeBody">This vessel installs HiTech-OS with your identity, desktop, and storage layout. Every control is live. Every choice is reversible until ignition.</p>
+          <button class="primary" id="beginBtn" data-i18n="begin">Begin pre-flight checks</button>
+        </div>
+        <div class="radar-wrap">
+          <svg class="radar" viewBox="0 0 300 300" role="img" aria-label="Radar">
+            <defs>
+              <radialGradient id="radarGlow"><stop offset="0%" stop-color="#00f0ff" stop-opacity=".25"/><stop offset="100%" stop-color="#00f0ff" stop-opacity="0"/></radialGradient>
+              <linearGradient id="sweep"><stop offset="0%" stop-color="#00f0ff" stop-opacity=".7"/><stop offset="100%" stop-color="#00f0ff" stop-opacity="0"/></linearGradient>
+            </defs>
+            <circle cx="150" cy="150" r="132" class="radar-ring"/><circle cx="150" cy="150" r="94" class="radar-ring faint"/><circle cx="150" cy="150" r="54" class="radar-ring faint"/>
+            <path d="M150 18v264M18 150h264" class="radar-axis"/>
+            <circle cx="150" cy="150" r="132" fill="url(#radarGlow)"/>
+            <g class="radar-sweep"><path d="M150 150 L150 18 A132 132 0 0 1 243 58 Z" fill="url(#sweep)"/></g>
+            <g class="radar-blips"><circle cx="206" cy="96" r="3"/><circle cx="108" cy="202" r="2.5"/><circle cx="78" cy="104" r="2"/></g>
+            <text x="150" y="286" text-anchor="middle" class="radar-label">ORION-X / DEEP SPACE ARRAY</text>
+          </svg>
+          <div class="radar-caption"><span class="pulse"></span><span data-i18n="telemetry">Telemetry nominal</span></div>
+        </div>
+      </section>
+
+      <section class="config" id="config" hidden>
+        <div class="config-grid">
+          <section class="panel identity-panel">
+            <div class="panel-head"><span class="panel-index">01</span><h3 data-i18n="identity">Crew identity</h3></div>
+            <label class="field"><span data-i18n="hostname">Hostname</span><input id="hostname" value="hitechos-orion" spellcheck="false" autocomplete="off" /></label>
+            <label class="field"><span data-i18n="username">Username</span><input id="username" value="hitech" spellcheck="false" autocomplete="off" /></label>
+            <label class="field"><span data-i18n="password">Password</span><input id="password" type="password" autocomplete="new-password" placeholder="••••••••" /></label>
+            <p class="hint" data-i18n="identityHelp">The password is written once to the target configuration as a hashed NixOS password.</p>
+          </section>
+
+          <section class="panel desktop-panel">
+            <div class="panel-head"><span class="panel-index">02</span><h3 data-i18n="desktop">Bridge configuration</h3></div>
+            <div class="desktop-grid" id="desktopGrid"></div>
+          </section>
+
+          <section class="panel storage-panel">
+            <div class="panel-head"><span class="panel-index">03</span><h3 data-i18n="storage">Target storage</h3></div>
+            <div class="mode-switch">
+              <button class="mode active" data-mode="replace" data-i18n="modeReplace">Safe dual-boot</button>
+              <button class="mode" data-mode="erase" data-i18n="modeErase">Erase disk</button>
+            </div>
+            <p class="hint" id="modeHint"></p>
+            <div class="storage-actions"><button class="ghost" id="refreshDisks" data-i18n="refresh">Refresh disks</button><button class="ghost" id="gpartedBtn" data-i18n="openGparted">Open GParted</button></div>
+            <div class="disk-list" id="diskList"></div>
+            <div id="diskDetail" class="disk-detail"></div>
+          </section>
+
+          <section class="panel network-panel">
+            <div class="panel-head"><span class="panel-index">04</span><h3 data-i18n="network">Uplink / Wi-Fi</h3></div>
+            <div class="network-status" id="networkStatus"><span class="pulse"></span><span data-i18n="checkingNetwork">Scanning spectrum…</span></div>
+            <button class="ghost" id="scanWifi" data-i18n="scanWifi">Scan Wi-Fi</button>
+            <div class="wifi-list" id="wifiList"></div>
+            <div class="wifi-connect">
+              <input id="wifiPassword" type="password" placeholder="Wi-Fi password" data-i18n-placeholder="wifiPassword" />
+              <button class="ghost" id="connectWifi" data-i18n="connect">Connect</button>
+            </div>
+          </section>
+        </div>
+
+        <footer class="launch">
+          <div class="launch-copy"><span data-i18n="readyToInstall">All systems checked. Ignition writes the selected configuration.</span><small id="launchSummary"></small></div>
+          <button class="primary launch-btn" id="installBtn" data-i18n="install">Ignite installation</button>
+        </footer>
+      </section>
+    </main>
+  </div>
+
+  <div class="overlay" id="installOverlay" hidden>
+    <div class="overlay-card">
+      <div class="kicker" data-i18n="installingKicker">ORION-X // IGNITION SEQUENCE</div>
+      <h2 id="installTitle" data-i18n="installing">Installing HiTech-OS</h2>
+      <div class="progress"><div class="progress-fill" id="progressFill"></div><span id="progressText">0%</span></div>
+      <p id="installStatus" class="status-line"></p>
+      <pre class="log" id="installLog"></pre>
+      <button class="ghost" id="toggleLog" data-i18n="showLogs">Show telemetry</button>
+      <button class="primary" id="finishBtn" hidden data-i18n="rebootNow">Reboot now</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/main.js"></script>
+</body>
+</html>

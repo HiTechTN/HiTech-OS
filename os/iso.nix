@@ -44,6 +44,25 @@ let
     categories = [ "System" ];
   };
 
+  # ORION-X is the automatic welcome screen (and a permanent application
+  # launcher) on the Live ISO. Calamares stays installed as a recovery path.
+  hitechInstaller = pkgs.callPackage ../hitech-installer { };
+
+  hitechInstallerDesktop = pkgs.makeDesktopItem {
+    name = "hitech-installer";
+    desktopName = "HiTech-OS Spaceship Installer";
+    comment = "ORION-X Spaceship Cockpit — install HiTech-OS";
+    icon = "system-software-install";
+    exec = "${hitechInstaller}/bin/hitech-installer";
+    terminal = false;
+    categories = [ "System" "Settings" ];
+  };
+
+  hitechInstallerAutostart = pkgs.makeAutostartItem {
+    name = "hitech-installer";
+    package = hitechInstallerDesktop;
+  };
+
   hitechosDocsItem = pkgs.makeDesktopItem {
     name = "hitechos-docs";
     desktopName = "HiTech-OS — Documentation (roadmap)";
@@ -57,10 +76,17 @@ in
 {
   imports = [
     ./common.nix
+    ./hardware-universal.nix
     ./calamares-hitechos.nix
   ];
 
   networking.hostName = "hitechos-live";
+
+  # Stop UDisks2/GVFS from automounting target partitions under /run/media
+  # while the installer is partitioning. The installer still unmounts
+  # defensively, but this removes the race at the source.
+  services.udisks2.enable = lib.mkForce false;
+  services.gvfs.enable = lib.mkForce false;
 
   # Doc embarquée pour un accès hors-ligne (menu "HiTech-OS — Documentation")
   environment.etc."hitechos/ROADMAP.md".source = ../docs/ROADMAP.md;
@@ -69,6 +95,8 @@ in
     pkgs.git # live : le script Calamares l'utilise hors chroot (calamares-hitechos.nix)
     hitechosStatusItem
     hitechosDocsItem
+    hitechInstallerDesktop
+    hitechInstallerAutostart
   ];
 
   # --- Flatpak, préconfiguré avec Flathub (pas de remote-add manuel) ---
