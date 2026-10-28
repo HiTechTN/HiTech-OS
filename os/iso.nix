@@ -82,6 +82,12 @@ in
 
   networking.hostName = "hitechos-live";
 
+  # The live image tracks the release it was built from. This must be explicit:
+  # common.nix only *defaults* stateVersion so an installed target's own
+  # configuration.nix can win, and installation-cd-base already defaults it to
+  # lib.trivial.release — two different mkDefault values would conflict.
+  system.stateVersion = lib.mkForce config.system.nixos.release;
+
   # Stop UDisks2/GVFS from automounting target partitions under /run/media
   # while the installer is partitioning. The installer still unmounts
   # defensively, but this removes the race at the source.

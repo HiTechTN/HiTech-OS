@@ -177,5 +177,9 @@
   networking.firewall.enable = true; # explicite : tout est fermé sauf allowedTCPPorts ci-dessus
   security.auditd.enable = true; # journalisation des actions système (utile pour la piste d'audit AgentOS)
 
-  system.stateVersion = "24.05";
+  # mkDefault: an installer-generated /etc/nixos/configuration.nix states the
+  # NixOS release it installed (NixOS refuses two different plain definitions,
+  # which aborted every cockpit/Calamares install with
+  # "system.stateVersion has conflicting definition values").
+  system.stateVersion = lib.mkDefault "24.05";
 }
