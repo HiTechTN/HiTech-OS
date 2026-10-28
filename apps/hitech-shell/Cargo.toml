@@ -26,3 +26,4 @@ slint-ui = []
 iced-ui = []
 
 [dependencies]
+calloop = "=0.13.0"

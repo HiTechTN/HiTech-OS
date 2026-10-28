@@ -159,6 +159,14 @@ let
       if ! grep -qF "$import_rel" "$cfg"; then
         ${pkgs.gnused}/bin/sed -i "\|hardware-configuration.nix|a\\      $import_rel" "$cfg"
       fi
+
+      # Ensure the bundled copy landed as real files, not symlink stubs
+      # pointing back into the ISO /nix/store. Dereferencing avoids
+      # chmod/read errors on the target when the closure is later
+      # manipulated or when nixos-install traverses the tree.
+      if [ -d "$repo/.git" ]; then
+        rm -rf "$repo/.git"
+      fi
     fi
 
     # The Calamares users module can hand us the OEM placeholder; never write

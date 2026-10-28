@@ -96,7 +96,7 @@ bundle_code = (
     '            import_rel = "./hitech-os/os/installation.nix"\n'
     '            if target_repo.exists():\n'
     '                shutil.rmtree(target_repo)\n'
-    '            shutil.copytree(hitech_src, target_repo)\n'
+    '            shutil.copytree(hitech_src, target_repo, symlinks=False)\n'
     '            cfg_path = Path(variables["root"] + "/etc/nixos/configuration.nix")\n'
     '            if cfg_path.exists():\n'
     '                cfg_text = cfg_path.read_text()\n'

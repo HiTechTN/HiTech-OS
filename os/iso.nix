@@ -107,7 +107,8 @@ in
     hitechosDocsItem
     hitechInstallerDesktop
     hitechInstallerAutostart
-    hitechInstaller # binaire pour que l'installeur soit dans /run/current-system/sw/bin/
+    hitechInstaller # binaire pour que l'installeur soit dans /run/current-system/sw/bin/hitech-installer
+    pkgs.which # utile pour les scripts live (trouver hitech-installer dans PATH)
   ];
 
   # --- Flatpak, préconfiguré avec Flathub (pas de remote-add manuel) ---

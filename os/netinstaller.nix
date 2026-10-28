@@ -226,6 +226,7 @@ in
       mesa
       libglvnd
       hitechInstaller
+      pkgs.which
       # Kept for the installer pipeline and live debugging.
       sudo
       nix
