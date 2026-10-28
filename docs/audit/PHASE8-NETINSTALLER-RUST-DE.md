@@ -138,8 +138,8 @@ Chromium in kiosk/app mode.
 
 | Target | Size | Store path |
 |---|---|---|
-| NetInstaller | **2.0 GiB** (2 097 152 000 B) | `/nix/store/4kja6i8ic8iwlfx0ykcrp84z86d3d5mv-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso` |
-| Live (GNOME + Calamares) | **3.4 GiB** (3 546 349 568 B) | `/nix/store/q32xbfdakzxmv70q5mhg6ph7yjv03zcv-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso` |
+| NetInstaller | **2.0 GiB** (2 097 152 000 B) | `/nix/store/4kja6i8ic8iwlfx0ykcrp84z86d3d5mv-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié : <https://github.com/HiTechTN/HiTech-OS/releases/download/v3.0-orion-x/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso> |
+| Live (GNOME + Calamares) | **3.4 GiB** (3 546 349 568 B) | `/nix/store/z1bnj106kcfidk7a0r1xjv7wzjxfyj78-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso` | Publié (scission 2 fichiers pour GitHub Releases) : <https://github.com/HiTechTN/HiTech-OS/releases/tag/v3.0-orion-x> — `nixos-live.iso.part00.iso.part` (1 992 294 400 B) + `nixos-live.iso.part01.iso.part` (1 554 055 168 B). Reassembly : `cat *.iso.part0*.iso.part > nixos-live.iso` |
 
 Remaining bulk is genuine firmware and browser: `linux-firmware` 847 MB,
 `chromium-unwrapped` 736 MB, `llvm` libs + `mesa` 852 MB.
