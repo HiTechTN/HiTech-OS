@@ -76,10 +76,26 @@ rustPlatform.buildRustPackage (finalAttrs: {
     # Wayland session entry consumed by services.displayManager.sessionPackages.
     install -Dm644 ${sessionFile} $out/share/wayland-sessions/hitech-shell.desktop
 
-    # The compositor needs the XKB data at runtime, independent of the
-    # display-manager environment.
+    # The compositor dlopen()s libEGL/libGLES and the Mesa GBM drivers, and
+    # needs the XKB data at runtime, independent of the display-manager
+    # environment. Without these the session exits 101 from SDDM before the
+    # first DRM frame.
     wrapProgram $out/bin/hitech-shell \
-      --prefix XKB_CONFIG_ROOT : ${xkeyboard-config}/share/X11/xkb
+      --prefix XKB_CONFIG_ROOT : ${xkeyboard-config}/share/X11/xkb \
+      --prefix LD_LIBRARY_PATH : ${
+        lib.makeLibraryPath [
+          libGL
+          mesa
+          libgbm
+          libdrm
+          libinput
+          wayland
+          libxkbcommon
+          seatd
+          udev
+        ]
+      } \
+      --prefix LIBGL_DRIVERS_PATH : ${mesa}/lib/dri
   '';
 
   passthru.providedSessions = [ "hitech-shell" ];

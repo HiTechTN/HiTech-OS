@@ -104,7 +104,7 @@ type OutputManager = DrmOutputManager<
 type ShellRenderElement =
     SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>;
 
-const CLEAR_COLOR: [f32; 4] = [0.04, 0.05, 0.08, 1.0];
+const CLEAR_COLOR: [f32; 4] = [0.015, 0.09, 0.12, 1.0];
 const SUPPORTED_FORMATS: &[Fourcc] = &[Fourcc::Argb8888, Fourcc::Xrgb8888];
 
 /// Errors surfaced by the compositor bootstrap or a fatal backend failure.
