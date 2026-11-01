@@ -25,6 +25,42 @@ Voir [`docs/ROADMAP.md`](docs/ROADMAP.md) pour le détail des choix
 (NixOS vs Buildroot/Yocto, mode de survie edge, backend d'inférence, etc.)
 et le plan de développement par phases.
 
+## Qualité, tests et CI
+
+La CI (`.github/workflows/ci.yml`) exécute, à chaque push/PR :
+
+- **Rust** (`ai-daemon`, `apps/hitech-shell`, `hitech-installer`) :
+  `cargo fmt --check`, `cargo clippy --all-targets -D warnings`, `cargo test`.
+- **Python** : `pytest` sur `apps/genio` (162 tests) et `apps/hitech-store`
+  (14 tests d'auth/API/sécurité).
+- **Frontend** : `tsc --noEmit && vite build` pour `apps/genio/genio_web`.
+- **Nix** : `nix flake check` (construit et teste les paquets),
+  `patient-zero`, puis l'ISO live.
+- **Firmware** : `pio run` pour le nœud ESP32.
+
+En local :
+
+```console
+# Rust
+for d in ai-daemon apps/hitech-shell hitech-installer; do
+  (cd "$d" && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
+done
+
+# Python
+(cd apps/genio && python -m pytest -q)
+(cd apps/hitech-store && python -m pytest -q)
+
+# Frontend
+(cd apps/genio/genio_web && npm ci && npm run build)
+
+# Nix (construit hitech-shell, hitech-installer et ai-daemon + tests)
+nix flake check
+```
+
+L'audit de sécurité de la Phase 7 (constats, correctifs et actions de
+déploiement restantes) est dans
+[`docs/audit/PHASE7-SECURITY-AUDIT.md`](docs/audit/PHASE7-SECURITY-AUDIT.md).
+
 ## Tester l'ISO sur matériel réel
 
 Le dernier build validé est publié dans la release préliminaire

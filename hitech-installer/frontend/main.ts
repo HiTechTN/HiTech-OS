@@ -149,17 +149,23 @@ const I18N: Record<Lang, Record<string, string>> = {
 };
 
 // The kiosk browser may open its first window before the compositor grants
-// fullscreen. Capture the first pointer gesture (the operator's click on the
-// welcome screen) and promote the document to fullscreen synchronously; the
-// click itself still reaches the button underneath.
+// fullscreen. Promote the document on the first click, but let the Begin
+// button transition first: entering fullscreen reflows the welcome screen and
+// would otherwise swallow that click. Begin calls this itself after flipping
+// to the configuration panel.
 let cockpitFullscreenRequested = false;
-document.addEventListener("pointerdown", () => {
+const requestCockpitFullscreen = (): void => {
   if (cockpitFullscreenRequested) return;
   cockpitFullscreenRequested = true;
   if (!document.fullscreenElement) {
     document.documentElement.requestFullscreen?.().catch(() => {});
   }
-}, { capture: true, once: true });
+};
+document.addEventListener("click", (event) => {
+  const target = event.target as Element | null;
+  if (target?.closest?.("#beginBtn")) return;
+  requestCockpitFullscreen();
+}, { capture: true });
 
 const DESKTOPS = [
   { id: "orion", glyph: "◈" },
@@ -514,6 +520,7 @@ function init(): void {
   byId("beginBtn").addEventListener("click", () => {
     byId("hero").hidden = true;
     byId("config").hidden = false;
+    requestCockpitFullscreen();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   byId("refreshDisks").addEventListener("click", () => loadDisks(true));

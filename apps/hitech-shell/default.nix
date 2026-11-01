@@ -1,15 +1,25 @@
-# Nix derivation — hitech-shell (Phase 8 scaffold).
+# Nix derivation — hitech-shell.
 #
-# The scaffold is deliberately dependency-free: `rustc` is invoked directly so
-# the derivation builds on the cache builder without a vendored Cargo registry.
-# When Smithay/Slint/Iced land, switch this file to
-# `rustPlatform.buildRustPackage { cargoLock.lockFile = ./Cargo.lock; ... }`
-# and let the binary cache publish the heavier closure.
+# The shell now links `calloop` (Smithay event-loop seam), so the old direct
+# `rustc src/main.rs` build no longer works: it needs the dependency graph from
+# Cargo.toml. `rustPlatform.buildRustPackage` fetches the pinned crates from
+# Cargo.lock (checksum-verified), runs `cargo test` (layout/config unit tests)
+# and installs the binary plus the Wayland session entry.
 {
   lib,
-  stdenv,
-  rustc,
+  rustPlatform,
   makeWrapper,
+  pkg-config,
+  seatd,
+  libinput,
+  udev,
+  libdrm,
+  libgbm,
+  wayland,
+  libxkbcommon,
+  mesa,
+  libGL,
+  xkeyboard-config,
 }:
 
 let
@@ -22,7 +32,7 @@ let
     DesktopNames=HiTechShell
   '';
 in
-stdenv.mkDerivation (finalAttrs: {
+rustPlatform.buildRustPackage (finalAttrs: {
   pname = "hitech-shell";
   version = "0.1.0";
 
@@ -39,38 +49,43 @@ stdenv.mkDerivation (finalAttrs: {
       ]);
   };
 
-  nativeBuildInputs = [ makeWrapper ];
+  cargoLock.lockFile = ./Cargo.lock;
 
-  buildPhase = ''
-    runHook preBuild
+  nativeBuildInputs = [ makeWrapper pkg-config ];
 
-    ${rustc}/bin/rustc \
-      --edition=2021 \
-      --crate-name hitech_shell \
-      -C opt-level=2 \
-      -C debuginfo=1 \
-      src/main.rs \
-      -o hitech-shell
+  buildInputs = [
+    seatd
+    seatd.dev
+    libinput
+    libinput.dev
+    udev
+    udev.dev
+    libdrm
+    libdrm.dev
+    libgbm
+    wayland
+    wayland.dev
+    libxkbcommon
+    libxkbcommon.dev
+    mesa
+    libGL
+    xkeyboard-config
+  ];
 
-    runHook postBuild
-  '';
-
-  installPhase = ''
-    runHook preInstall
-
-    install -Dm755 hitech-shell $out/bin/hitech-shell
-
-    # Wayland session entry consumed by services.displayManager.sessionPackages
-    # (GDM/SDDM/greetd/regreet) once the compositor is real.
+  postInstall = ''
+    # Wayland session entry consumed by services.displayManager.sessionPackages.
     install -Dm644 ${sessionFile} $out/share/wayland-sessions/hitech-shell.desktop
 
-    runHook postInstall
+    # The compositor needs the XKB data at runtime, independent of the
+    # display-manager environment.
+    wrapProgram $out/bin/hitech-shell \
+      --prefix XKB_CONFIG_ROOT : ${xkeyboard-config}/share/X11/xkb
   '';
 
   passthru.providedSessions = [ "hitech-shell" ];
 
   meta = {
-    description = "HiTech-Shell — modular Wayland desktop shell for HiTech-OS (scaffold)";
+    description = "HiTech-Shell — modular Wayland desktop shell for HiTech-OS";
     homepage = "https://github.com/HiTechTN/HiTech-OS";
     license = lib.licenses.agpl3Only;
     mainProgram = "hitech-shell";

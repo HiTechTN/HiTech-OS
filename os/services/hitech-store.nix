@@ -15,6 +15,38 @@
 let
   cfg = config.services.hitech-store;
   hitechStore = pkgs.callPackage ../../apps/hitech-store/default.nix { };
+
+  # The tmpfiles placeholder ships a publicly known SECRET_KEY so that the
+  # service can boot before sops secrets are provisioned. That key signs the
+  # admin JWT: if it survives into an exposed deployment, anyone can forge an
+  # admin session. This oneshot replaces it with a per-boot random key when the
+  # placeholder (or an empty value) is still present; a real sops-provisioned
+  # key is never touched. Runs after hitechos-secrets, before the service.
+  envKeygen = pkgs.writeShellScript "hitech-store-keygen" ''
+    set -eu
+    umask 077
+    env_file=${lib.escapeShellArg cfg.environmentFile}
+    [ -f "$env_file" ] || exit 0
+
+    placeholder='^SECRET_KEY=dev-only-placeholder-change-me$'
+    if ${pkgs.gnugrep}/bin/grep -q "$placeholder" "$env_file" \
+      || ! ${pkgs.gnugrep}/bin/grep -q '^SECRET_KEY=.' "$env_file"; then
+      new_key="$(${pkgs.openssl}/bin/openssl rand -hex 32)"
+      tmp="$env_file.tmp.$$"
+      trap '${pkgs.coreutils}/bin/rm -f "$tmp"' EXIT
+      ${pkgs.gawk}/bin/awk -v key="$new_key" '
+        BEGIN { replaced = 0 }
+        /^SECRET_KEY=/ { print "SECRET_KEY=" key; replaced = 1; next }
+        { print }
+        END { if (!replaced) print "SECRET_KEY=" key }
+      ' "$env_file" > "$tmp"
+      ${pkgs.coreutils}/bin/chmod --reference="$env_file" "$tmp" 2>/dev/null || true
+      ${pkgs.coreutils}/bin/chown --reference="$env_file" "$tmp" 2>/dev/null || true
+      ${pkgs.coreutils}/bin/mv -f "$tmp" "$env_file"
+      trap - EXIT
+      echo "hitech-store-keygen: generated a per-boot SECRET_KEY (placeholder was still present)" >&2
+    fi
+  '';
 in
 {
   options.services.hitech-store = {
@@ -102,10 +134,31 @@ in
       "f /run/secrets/hitech-store.env 0640 root hitech-store - SECRET_KEY=dev-only-placeholder-change-me\\nSTORAGE_DIR=${cfg.stateDir}/storage\\nSMTP_HOST=localhost\\nSMTP_PORT=25\\nSMTP_USER=\\nSMTP_PASSWORD=\\nAGENT_SHARED_SECRET=\\nDEV_OTP_FALLBACK=${if cfg.devOtpFallback then "1" else "0"}\\nCOOKIE_SECURE=${if cfg.cookieSecure then "1" else "0"}\\nGITHUB_CLIENT_ID=\\nGITHUB_CLIENT_SECRET=\\nGITHUB_ALLOWED_LOGIN=\\nGITHUB_REDIRECT_URI="
     ];
 
+    # --- Remplace le SECRET_KEY placeholder par une clé aléatoire ---
+    systemd.services.hitech-store-keygen = {
+      description = "Ensure hitech-store has a non-placeholder SECRET_KEY";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "systemd-tmpfiles-setup.service"
+        "hitechos-secrets.service"
+      ];
+      before = [ "hitech-store.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${envKeygen}";
+      };
+    };
+
     # --- Service systemd ---
     systemd.services.hitech-store = {
       description = "hitech-store — portail universel HiTechTN (FastAPI/uvicorn)";
-      after = [ "network.target" "hitechos-secrets.service" ];
+      after = [
+        "network.target"
+        "hitechos-secrets.service"
+        "hitech-store-keygen.service"
+      ];
+      requires = [ "hitech-store-keygen.service" ];
       wantedBy = [ "multi-user.target" ];
 
       serviceConfig = {

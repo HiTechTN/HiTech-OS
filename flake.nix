@@ -20,6 +20,22 @@
             rust-analyzer
             pkg-config
             mosquitto
+            seatd
+            seatd.dev
+            libinput
+            libinput.dev
+            udev
+            udev.dev
+            libdrm
+            libdrm.dev
+            libgbm
+            wayland
+            wayland.dev
+            libxkbcommon
+            libxkbcommon.dev
+            mesa
+            libGL
+            xkeyboard-config
           ];
         };
 
@@ -27,6 +43,7 @@
           default = pkgs.callPackage ./apps/hitech-shell { };
           hitech-shell = pkgs.callPackage ./apps/hitech-shell { };
           hitech-installer = pkgs.callPackage ./hitech-installer { };
+          ai-daemon = pkgs.callPackage ./ai-daemon { };
         };
       }
     ) // {

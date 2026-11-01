@@ -1,10 +1,28 @@
 # Rust
 /ai-daemon/target/
 /hitech-installer/target/
+/apps/hitech-shell/target/
+target/
 
 # Nix
 result
 result-*
+/results/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# App runtime state and secrets (never commit)
+.env
+apps/hitech-store/storage/
+apps/hitech-store/logs/
+apps/hitech-store/.otp_state.json
+apps/hitech-store/.otp_state.lock
+apps/genio/state/
 
 # PlatformIO
 firmware/patient-zero/.pio/

@@ -505,7 +505,9 @@ def stream_file(path: Path, request: Request, filename: str, inline: bool = True
 async def drive_ui(request: Request):
     if request.method == "HEAD":
         return HTMLResponse(content="", headers={"X-Drive": "hitech-drive"})
-    return templates.TemplateResponse("store.html", {"request": request})
+    # Starlette >= 0.29 signature is (request, name, context); the old
+    # (name, context) form is deprecated and breaks on current releases.
+    return templates.TemplateResponse(request, "store.html", {"request": request})
 
 
 @app.get("/store/health")

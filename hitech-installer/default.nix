@@ -126,8 +126,10 @@ rustPlatform.buildRustPackage {
       '
   '';
 
-  # The installer is an interactive GUI; cargo test has no headless suite.
-  doCheck = false;
+  # The installer core has a headless test suite (JSON parser, request
+  # validation, path handling, shell-escaping helpers); run it during the Nix
+  # build so a broken installer cannot produce an ISO.
+  doCheck = true;
 
   meta = with lib; {
     description = "HiTech-OS ORION-X Spaceship Cockpit installer (Rust core + TypeScript HUD)";

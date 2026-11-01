@@ -58,9 +58,12 @@ impl CpuBackend {
     pub fn new() -> Result<Self> {
         #[cfg(any(feature = "cpu", feature = "cuda"))]
         {
-            let backend = LlamaBackend::init()
-                .context("echec d'initialisation du backend llama.cpp")?;
-            Ok(Self { backend, model: None })
+            let backend =
+                LlamaBackend::init().context("echec d'initialisation du backend llama.cpp")?;
+            Ok(Self {
+                backend,
+                model: None,
+            })
         }
 
         #[cfg(not(any(feature = "cpu", feature = "cuda")))]
@@ -136,14 +139,13 @@ impl InferenceBackend for CpuBackend {
                 let is_last = i == last_index;
                 batch.add(token, i, &[0], is_last)?;
             }
-            ctx.decode(&mut batch).context("llama_decode() a echoue sur le prompt")?;
+            ctx.decode(&mut batch)
+                .context("llama_decode() a echoue sur le prompt")?;
 
             let mut n_cur = batch.n_tokens();
             let mut decoder = encoding_rs::UTF_8.new_decoder();
-            let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::dist(1234),
-                LlamaSampler::greedy(),
-            ]);
+            let mut sampler =
+                LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
             let mut output = String::new();
 
             while n_cur <= tokens_list_len_plus(max_tokens, n_cur) {
@@ -163,7 +165,8 @@ impl InferenceBackend for CpuBackend {
                 batch.add(token, n_cur, &[0], true)?;
                 n_cur += 1;
 
-                ctx.decode(&mut batch).context("llama_decode() a echoue pendant la generation")?;
+                ctx.decode(&mut batch)
+                    .context("llama_decode() a echoue pendant la generation")?;
             }
 
             Ok(output)
@@ -217,5 +220,44 @@ pub fn select_backend() -> Result<Box<dyn InferenceBackend>> {
     #[cfg(not(feature = "cuda"))]
     {
         Ok(Box::new(CpuBackend::new()?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(any(feature = "cpu", feature = "cuda")))]
+    #[test]
+    fn default_backend_is_the_stub() {
+        let backend = select_backend().expect("stub backend must initialise");
+        assert_eq!(backend.name(), "cpu (stub fallback)");
+    }
+
+    #[cfg(not(any(feature = "cpu", feature = "cuda")))]
+    #[test]
+    fn stub_load_model_accepts_any_path() {
+        let mut backend = CpuBackend::new().expect("stub backend must initialise");
+        backend
+            .load_model(Path::new("/nonexistent/model.gguf"))
+            .expect("the stub must not touch the filesystem");
+    }
+
+    #[cfg(not(any(feature = "cpu", feature = "cuda")))]
+    #[test]
+    fn stub_generate_echoes_the_prompt_and_explains_the_feature_gate() {
+        let mut backend = CpuBackend::new().expect("stub backend must initialise");
+        let output = backend
+            .generate("temperature du site ?", Some(8))
+            .expect("the stub always answers");
+        assert!(output.contains("temperature du site ?"));
+        assert!(output.contains("feature `cpu`"));
+    }
+
+    #[cfg(any(feature = "cpu", feature = "cuda"))]
+    #[test]
+    fn cpu_backend_reports_a_real_name() {
+        let backend = CpuBackend::new().expect("llama.cpp backend must initialise");
+        assert!(backend.name().contains("llama.cpp"));
     }
 }

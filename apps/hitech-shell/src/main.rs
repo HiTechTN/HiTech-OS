@@ -17,7 +17,10 @@ use shell::ShellSurface;
 fn main() {
     let config = config::Config::from_env();
 
-    println!("hitech-shell {}", option_env!("CARGO_PKG_VERSION").unwrap_or("0.1.0"));
+    println!(
+        "hitech-shell {}",
+        option_env!("CARGO_PKG_VERSION").unwrap_or("0.1.0")
+    );
     println!("layout profile : {}", config.layout.as_str());
     println!("config source  : {}", config.source);
     println!("outputs        : {}", config.outputs.join(", "));
