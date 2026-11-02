@@ -423,8 +423,11 @@ fn serve_static(stream: &mut TcpStream, root: &Path, rel: &str) {
 }
 
 fn status_json(state: &Arc<Mutex<InstallStatus>>) -> String {
+    // Probe the network before taking the status lock. A slow `nmcli` call
+    // must never block the install thread's progress updates.
+    let online = network_online();
     let mut st = state.lock().unwrap();
-    st.network_online = network_online();
+    st.network_online = online;
     format!(
         "{{\"running\":{},\"success\":{},\"progress\":{},\"status\":\"{}\",\"logs\":\"{}\",\"network_online\":{}}}",
         st.running, st.success, st.progress, json_escape(&st.status), json_escape(&st.logs), st.network_online
@@ -1016,16 +1019,18 @@ fn run_capture(program: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn network_online() -> bool {
-    if let Ok(out) = Command::new("ip")
-        .args(["route", "show", "default"])
+    // Bound each probe: the status endpoint is polled by the UI and must stay
+    // responsive even when NetworkManager's D-Bus service is wedged.
+    if let Ok(out) = Command::new("timeout")
+        .args(["2", "ip", "route", "show", "default"])
         .output()
     {
         if out.status.success() && !out.stdout.is_empty() {
             return true;
         }
     }
-    if let Ok(out) = Command::new("nmcli")
-        .args(["-t", "-f", "STATE", "general"])
+    if let Ok(out) = Command::new("timeout")
+        .args(["2", "nmcli", "-t", "-f", "STATE", "general"])
         .output()
     {
         if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("connected") {
