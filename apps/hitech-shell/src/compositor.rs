@@ -235,10 +235,16 @@ impl HitechShell {
             Generic::new(display, Interest::READ, Mode::Level),
             |_, display, state: &mut HitechShell| {
                 // SAFETY: the display lives in this event source until the loop exits.
-                unsafe {
-                    if let Err(e) = display.get_mut().dispatch_clients(state) {
-                        error!("wayland dispatch error: {e}");
-                    }
+                let display = unsafe { display.get_mut() };
+                if let Err(e) = display.dispatch_clients(state) {
+                    error!("wayland dispatch error: {e}");
+                }
+                // Registry replies and configure events are queued on the
+                // display, not sent by dispatch_clients alone. Without this
+                // flush a newly connected client blocks forever in
+                // wl_display.sync before it can create a surface.
+                if let Err(e) = display.flush_clients() {
+                    error!("wayland flush error: {e}");
                 }
                 Ok(PostAction::Continue)
             },
