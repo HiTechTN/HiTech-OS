@@ -2,9 +2,15 @@
 
 Status: architecture + scaffold landed; 8.2 ORION-X cockpit installs end-to-end and the
 installed disk boots (verified in QEMU, UEFI).
-Date: 2026-10-23 (updated 2026-10-28)
+Date: 2026-10-23 (updated 2026-11-03)
 Repo: `github:HiTechTN/HiTech-OS`
 Base commit: `2053f58` (Phase 7) + Phase 8 working tree
+
+> **2026-11-03:** Phase 8.5 final verification is complete for commit
+> `fcec72d`. See `INSTALLATION_VERIFICATION.md`, `RUNTIME_STABILITY_REPORT.md`,
+> and `TEST_SUMMARY_MATRIX.md`. The published ISOs still need the
+> `fcec72d` repository ref pushed (or a bundled source) before a default
+> install can succeed without the lab `/hostrepo` override.
 
 This document is the master reference for the Phase 8 pivot. It is deliberately
 written so that a future agent can resume without re-reading the whole repo.
@@ -872,3 +878,45 @@ scripts/publish-cache.sh --no-push --sign-key /tmp/test.secret hitech-shell
   host-side signing (no private key in CI).
 - `docs/ROADMAP.md` — Phase 8 architecture section and status update.
 - `docs/audit/PHASE8-NETINSTALLER-RUST-DE.md` — this document.
+
+---
+
+## 13. Phase 8.5 final verification (2026-11-03)
+
+Tested commit: `fcec72d09c328f4d22200e572783ac5cede3d299`.
+
+Final artifacts:
+
+| Image | Size (bytes) | SHA-256 |
+|---|---:|---|
+| NetInstaller | 2,097,152,000 | `30e3b7e18e5b203b93a3e3d0166b64395721957de1396f715eb4c03380c4ca9f` |
+| Live | 3,546,349,568 | `bcc44a1afbf40f8c260dd591b4f500bb07709d19308dfd0ef5a44524ee72b359` |
+
+Both squashfs payloads contain
+`i5g7srfdxxfgy3qmlwmmjigs4rb2b4sp-hitech-installer-2.0.0`; a fresh
+`nix build .#hitech-installer` at `fcec72d` resolves to the same path. The Live
+ISO boots to GNOME with the ORION-X cockpit visible
+(`/data/e2e-hitechos/live-final-screen.png`).
+
+Clean QEMU install from the NetInstaller finished with
+`progress=100`, `Installation complete. Target is ready to reboot.` The
+installed disk then booted without the ISO to SDDM, and a manual login started
+`hitech-shell` on seat0/VT2. A real `foot` client rendered on `wayland-1`, and a
+30-second recording completed with both processes alive.
+
+Important scope notes:
+
+- The install used `file:///hostrepo` at the full `fcec72d` SHA. The ISO default
+  points at the GitHub ref, which is not published yet; this is a release
+  blocker.
+- The installer does not generate automatic login; SDDM login is required.
+- A clean install does not ship a terminal/client. `foot` was fetched at runtime
+  for the render test.
+- Physical GPU/input and long-duration soak testing are still open.
+
+Verification scripts live in `scripts/e2e/`:
+
+- `check-iso-contents.sh` — mounts both ISOs and asserts the installer payload.
+- `verify-target-session.sh` — read-only SSH checks for the target session.
+- `capture-x11-session.sh` — records Xvfb/QEMU evidence.
+- `qmp-screendump.py` — headless QEMU framebuffer capture.
