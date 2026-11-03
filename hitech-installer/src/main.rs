@@ -880,6 +880,12 @@ fn target_config(req: &InstallRequest, password_hash: &str) -> String {
         "orion" => {
             s.push_str("  services.displayManager.sddm.enable = true;\n");
             s.push_str("  services.displayManager.sddm.wayland.enable = true;\n");
+            s.push_str("  services.displayManager.defaultSession = \"hitech-shell\";\n");
+            s.push_str("  services.displayManager.autoLogin.enable = true;\n");
+            s.push_str(&format!(
+                "  services.displayManager.autoLogin.user = {};\n",
+                nix_escape(&req.username)
+            ));
         }
         "plasma6" => {
             s.push_str("  services.desktopManager.plasma6.enable = true;\n");
@@ -1665,6 +1671,24 @@ mod tests {
         assert_eq!(nix_escape("a\"b"), "\"a\\\"b\"");
         assert_eq!(nix_escape("a\\b"), "\"a\\\\b\"");
         assert_eq!(nix_escape("${pkgs.hello}"), "\"\\${pkgs.hello}\"");
+    }
+
+    #[test]
+    fn orion_target_config_enables_autologin_for_the_chosen_user() {
+        let req = request("erase");
+        let cfg = target_config(&req, "$6$test");
+        assert!(cfg.contains("services.displayManager.defaultSession = \"hitech-shell\";"));
+        assert!(cfg.contains("services.displayManager.autoLogin.enable = true;"));
+        assert!(cfg.contains("services.displayManager.autoLogin.user = \"commander\";"));
+    }
+
+    #[test]
+    fn non_orion_target_config_does_not_force_hitech_autologin() {
+        let mut req = request("erase");
+        req.desktop = "plasma6".to_string();
+        let cfg = target_config(&req, "$6$test");
+        assert!(!cfg.contains("autoLogin"));
+        assert!(!cfg.contains("defaultSession = \"hitech-shell\""));
     }
 
     #[test]

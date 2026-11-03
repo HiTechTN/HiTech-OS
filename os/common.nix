@@ -24,6 +24,10 @@
   environment.systemPackages = with pkgs; [
     git
     curl
+    # Field terminal: the Orion/HiTech-Shell session starts with an empty
+    # compositor surface, so every installed node needs a Wayland client.
+    # `foot` is also the terminal used by the Live/NetInstaller images.
+    foot
   ];
 
   boot.kernelPackages = pkgs.linuxPackages_latest;
