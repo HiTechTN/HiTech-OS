@@ -1,58 +1,52 @@
-# HiTech-OS Phase 8.5 — Runtime Stability Report
+# HiTech-OS Phase 8.6 — Runtime Stability Report
 
-Status: **PASS for the exercised 30-second clean-install session smoke test**
-Date: 2026-11-03
-Tested commit: `fcec72d09c328f4d22200e572783ac5cede3d299`
-Primary target: clean QEMU install on `/data/e2e-hitechos/final-target2.qcow2`
+Status: **PASS for the exercised 30-second autologin session smoke test**
+Date: 2026-11-04
+Tested commit: `7691f3107b214237c5cb2cdd65ab1e1b5d5ca059`
+Primary target: fresh QEMU install on `/data/e2e-hitechos/field-target.qcow2`
 
 ## What was exercised
 
 1. Boot the installed disk without the ISO under OVMF.
-2. Reach SDDM with the `HiTech Shell` Wayland session selected.
-3. Log in as `commander` with the installer-created password.
-4. Confirm `hitech-shell` starts on seat0/VT2 and creates `wayland-1`.
-5. Launch `foot` against the compositor socket.
-6. Record the rendered desktop for 30 seconds and check process liveness.
+2. Observe SDDM autologin as `hitech` into the `hitech-shell` Wayland session.
+3. Confirm `hitech-shell` starts on seat0/tty1 and creates `wayland-1`.
+4. Confirm `foot` is present in the installed system path.
+5. Launch `foot` against the compositor socket and record for 30 seconds.
 
 ## Results
 
 | Observation | Result |
 |---|---|
-| SDDM | Active; greeter rendered; user `commander` listed |
-| Session command | `hitech-shell` selected as Wayland session |
-| Compositor process | PID 33775, state `Ssl+`, alive for the full test |
+| SDDM | Active; `sddm-helper ... --autologin` for user `hitech` |
+| Session | ID 1, `Type=wayland`, `Class=user`, `Active=yes`, `TTY=tty1` |
+| Session command | `hitech-shell` |
+| Compositor process | PID 1075, alive for the full test |
 | Wayland socket | `/run/user/1000/wayland-1` present |
-| Client process | `foot` PID 34040, alive for the full recording |
-| Client window | CSD title bar `HiTech Final — Clean Install`; terminal text visible |
-| Recording | 30.000 s, 30,179 bytes, H.264 |
-| Crash/panic | None observed in the session |
-| Process check at end | compositor uptime 3:01; client uptime 2:01 |
-
-The earlier target at `8e08547` also produced rendered `foot` evidence after
-the compositor flush fix: 15-second clip
-`/data/e2e-hitechos/hitechos-stability-test.mp4` and frame
-`/data/e2e-hitechos/stability-frame.png`.
+| Installed client | `/run/current-system/sw/bin/foot`, version 1.28.0 |
+| Client process | `foot` PID 1411, alive for the full recording |
+| Client window | CSD title bar `HiTech Field Terminal`; terminal text visible |
+| Recording | 30.000 s, H.264 |
+| Crash/panic | None observed |
+| Process check after capture | compositor uptime 1:32; client uptime 1:10 |
 
 ## Evidence
 
-- `/data/e2e-hitechos/final-clean-stability.mp4` — 30 s clean-target recording
-- `/data/e2e-hitechos/final-clean-stability-frame.png` — final frame
-- `/data/e2e-hitechos/final2-foot.png` — still of the rendered terminal
-- `/data/e2e-hitechos/final2c-sddm.png` — SDDM login screen
-- `/data/e2e-hitechos/hitechos-stability-test.mp4` — earlier 15 s target clip
+- `/data/e2e-hitechos/field-autologin.png` — autologin session surface
+- `/data/e2e-hitechos/field-foot.png` — installed `foot` rendering
+- `/data/e2e-hitechos/field-stability.mp4` — 30 s recording
+- `/data/e2e-hitechos/field-stability-frame.png` — final frame
+- `/data/e2e-hitechos/flake-check.log` — `nix flake check` output
 
 ## Root causes fixed before this run
 
-1. **`libEGL`/Mesa not visible to the session.** The product wrapper did not
-   export the graphics runtime paths. `cbbdb5e` added `LD_LIBRARY_PATH` for
-   `libGL`, `mesa`, `libgbm`, `libdrm`, `libinput`, `wayland`,
-   `libxkbcommon`, `seatd`, and `udev`, plus `LIBGL_DRIVERS_PATH=${mesa}/lib/dri`.
-2. **Clients hung during `wl_display.sync`.** The compositor dispatched client
-   messages but did not flush replies. `8e08547` adds
-   `display.flush_clients()` after `dispatch_clients()`.
-3. **Unreadable compositor background.** The clear colour was changed to
-   `[0.015, 0.09, 0.12, 1.0]` so a working session is visually distinct from a
-   black failed session.
+1. **`libEGL`/Mesa not visible to the session.** `cbbdb5e` added the graphics
+   runtime paths for `libGL`, `mesa`, `libgbm`, `libdrm`, `libinput`, `wayland`,
+   `libxkbcommon`, `seatd`, and `udev`, plus `LIBGL_DRIVERS_PATH`.
+2. **Clients hung during `wl_display.sync`.** `8e08547` flushes client replies
+   after dispatching messages.
+3. **Unreadable compositor background.** The clear colour is
+   `[0.015, 0.09, 0.12, 1.0]`, so a working session is distinct from a failed
+   black screen.
 
 ## Client protocol observations
 
@@ -66,16 +60,16 @@ the compositor flush fix: 15-second clip
 - no text-input interface; IME disabled
 - no decoration manager; client-side decorations used unconditionally
 
-These are feature gaps, not crashes. The important result is that a real
+These are feature gaps, not crashes. A real
 `wl_compositor`/`xdg_wm_base`/`wl_shm` client maps and renders.
 
 ## Known limitations
 
-- No panel, launcher, or first-party shell chrome yet; the session is a bare
-  compositor surface until a client is started externally.
-- No `linux-dmabuf`, so the exercised path is shared-memory (`wl_shm`) only.
+- No panel, launcher, or first-party shell chrome yet; Orion autologins to a
+  bare compositor surface until a client is started.
+- No `linux-dmabuf`; the exercised path is shared-memory (`wl_shm`) only.
 - Move/resize and server-side cursor are still stubs.
 - No physical GPU or physical input validation; QEMU uses virtio-gpu with
   software rendering.
-- 30 seconds is a smoke test, not a soak. A multi-hour idle/load test, repeated
-  client launch/exit, VT switching, and suspend/resume remain open.
+- 30 seconds is a smoke test, not a soak. Multi-hour idle/load, repeated client
+  launch/exit, VT switching, and suspend/resume remain open.
