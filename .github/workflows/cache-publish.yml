@@ -63,17 +63,29 @@ jobs:
           restore-prefixes-first-match: ${{ runner.os }}-nix-cache-publish-
           gc-max-store-size-linux: 10G
 
-      - name: Configure restricted SSH access to the cache host
+      - name: Check cache publishing configuration
+        id: cache-config
         env:
           CACHE_SSH_KEY: ${{ secrets.HITECH_CACHE_SSH_KEY }}
           CACHE_KNOWN_HOSTS: ${{ secrets.HITECH_CACHE_KNOWN_HOSTS }}
           CACHE_SSH_TARGET: ${{ secrets.HITECH_CACHE_SSH_TARGET }}
         run: |
           set -euo pipefail
-          test -n "$CACHE_SSH_KEY" || { echo "HITECH_CACHE_SSH_KEY is not set"; exit 1; }
-          test -n "$CACHE_KNOWN_HOSTS" || { echo "HITECH_CACHE_KNOWN_HOSTS is not set"; exit 1; }
-          test -n "$CACHE_SSH_TARGET" || { echo "HITECH_CACHE_SSH_TARGET is not set"; exit 1; }
+          if [ -z "$CACHE_SSH_KEY" ] || [ -z "$CACHE_KNOWN_HOSTS" ] || [ -z "$CACHE_SSH_TARGET" ]; then
+            echo "::warning title=Cache publish skipped::Configure HITECH_CACHE_SSH_KEY, HITECH_CACHE_KNOWN_HOSTS, and HITECH_CACHE_SSH_TARGET to enable publication."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
 
+      - name: Configure restricted SSH access to the cache host
+        if: steps.cache-config.outputs.enabled == 'true'
+        env:
+          CACHE_SSH_KEY: ${{ secrets.HITECH_CACHE_SSH_KEY }}
+          CACHE_KNOWN_HOSTS: ${{ secrets.HITECH_CACHE_KNOWN_HOSTS }}
+          CACHE_SSH_TARGET: ${{ secrets.HITECH_CACHE_SSH_TARGET }}
+        run: |
+          set -euo pipefail
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$CACHE_SSH_KEY" > "$HOME/.ssh/id_hitechos_cache"
           chmod 600 "$HOME/.ssh/id_hitechos_cache"
@@ -93,6 +105,7 @@ jobs:
           chmod 600 "$HOME/.ssh/config"
 
       - name: Build and publish closures
+        if: steps.cache-config.outputs.enabled == 'true'
         env:
           HITECH_CACHE_HOST: ${{ secrets.HITECH_CACHE_SSH_TARGET }}
           HITECH_CACHE_REMOTE_KEY: ${{ secrets.HITECH_CACHE_REMOTE_KEY }}
