@@ -13,7 +13,7 @@ pas chargés par le nœud HiTech-OS lui-même.
 
 Le mot de passe MQTT et le token InfluxDB ne sont **jamais** committés.
 Ils sont attendus à :
-- `/run/secrets/mosquitto-hitechos-agent` (mot de passe hashé, format `mosquitto_passwd`)
+- `/run/secrets/mosquitto-hitechos-node` (mot de passe hashé, format `mosquitto_passwd`)
 - `/run/secrets/telegraf-influx-token` (fichier d'env avec `INFLUX_TOKEN=...`)
 
 Ces fichiers sont pour l'instant à déposer manuellement sur le nœud.

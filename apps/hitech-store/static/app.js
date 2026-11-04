@@ -26,7 +26,7 @@ async function refreshAuth(){
   $("githubLogin").classList.toggle("hidden", !me.github_oauth);
   $("uploadBar").classList.toggle("hidden", !isAdmin);
   if(isAdmin){
-    const folders = ["public","private","agents/genio","agents/opencode","agents/claude","agents/shared"];
+    const folders = ["public","private","agents/genio","agents/shared"];
     $("upFolder").innerHTML = folders.map(f=>`<option value="${f}">${f}</option>`).join("");
   }
 }

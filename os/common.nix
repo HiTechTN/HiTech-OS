@@ -55,12 +55,12 @@
     enable = true;
     listeners = [{
       port = 1883;
-      users."hitechos-agent" = {
+      users."hitechos-node" = {
         acl = [ "readwrite hitechos/#" ];
         # Mot de passe défini hors-dépôt via `mosquitto_passwd`, injecté au
         # déploiement (jamais en clair dans ce fichier versionné) :
-        #   mosquitto_passwd -c /var/lib/mosquitto/passwd hitechos-agent
-        hashedPasswordFile = "/run/secrets/mosquitto-hitechos-agent"; # géré hors dépôt (agenix/sops-nix à brancher en Phase 6)
+        #   mosquitto_passwd -c /var/lib/mosquitto/passwd hitechos-node
+        hashedPasswordFile = "/run/secrets/mosquitto-hitechos-node"; # géré hors dépôt (agenix/sops-nix à brancher en Phase 6)
       };
     }];
   };
@@ -90,9 +90,9 @@
     # contenir QUE le hash, SANS préfixe "user:" (doc du module
     # hashedPasswordFile : "remove the username: prefix"). Avec le préfixe,
     # mosquitto recevait "user:user:hash" → décodage impossible → crash.
-    # Généré via : mosquitto_passwd -b -c /tmp/f hitechos-agent placeholder-change-me
-    # puis retrait du préfixe "hitechos-agent:".
-    "f /run/secrets/mosquitto-hitechos-agent 0600 root root - $7$1000$Z2MxgetdsMKH0Pguep3B46r5K/HZF6YOGlO50UO7qNEb4JEwoZD0+NQIQcN8OAA0olKDdD0bqaoe5zla7De2Og==$YE7drJO/5evWNUEb0i4Mfeja4+CKxTvGFjVIOpE90kxdffeOHYTriB3E8Mv24QnfARuVXmWH5E8mrFE3Feg51g=="
+    # Généré via : mosquitto_passwd -b -c /tmp/f hitechos-node placeholder-change-me
+    # puis retrait du préfixe "hitechos-node:".
+    "f /run/secrets/mosquitto-hitechos-node 0600 root root - $7$1000$Z2MxgetdsMKH0Pguep3B46r5K/HZF6YOGlO50UO7qNEb4JEwoZD0+NQIQcN8OAA0olKDdD0bqaoe5zla7De2Og==$YE7drJO/5evWNUEb0i4Mfeja4+CKxTvGFjVIOpE90kxdffeOHYTriB3E8Mv24QnfARuVXmWH5E8mrFE3Feg51g=="
     # Placeholder telegraf (optionnel mais même mécanisme) : un fichier
     # vide "INFLUX_TOKEN=" évite tout ÉCHOU DE TYPE du côté systemd et
     # garantit que l'option environmentFiles (type `absolute path` dans le
@@ -107,13 +107,13 @@
     # les deux fichiers de façon cohérente.
     # IMPORTANT : systemd EnvironmentFile attend UNE variable par ligne —
     # les deux paires sur une seule ligne faisaient de MQTT_USER une
-    # variable unique mal formée ("hitechos-agent MQTT_PASSWORD=...")
+    # variable unique mal formée ("hitechos-node MQTT_PASSWORD=...")
     # et laissait MQTT_PASSWORD indéfini : telegraf (strict env handling
     # par défaut depuis v1.38) envoyait alors le littéral "$MQTT_USER"
     # → CONNACK "not authorised" en boucle, service en start-limit-hit.
     # L'échappement \n est interprété par systemd-tmpfiles (docs :
     # "may contain C-style escapes").
-    "f /run/secrets/telegraf-mqtt-creds 0600 root root - MQTT_USER=hitechos-agent\\nMQTT_PASSWORD=placeholder-change-me"
+    "f /run/secrets/telegraf-mqtt-creds 0600 root root - MQTT_USER=hitechos-node\\nMQTT_PASSWORD=placeholder-change-me"
   ];
 
   services.telegraf = {
@@ -134,7 +134,7 @@
         data_format = "json";
         name_override = "hitechos_telemetry";
         # Broker local avec allow_anonymous=false (users définis) : sans
-        # creds, l'agent telegraf mourait au démarrage (CONNACK refusé).
+        # creds, le collecteur telegraf mourait au démarrage (CONNACK refusé).
         username = "$MQTT_USER";
         password = "$MQTT_PASSWORD";
       }];
@@ -179,7 +179,7 @@
   services.openssh.settings.PermitRootLogin = "no";
   services.openssh.settings.KbdInteractiveAuthentication = false;
   networking.firewall.enable = true; # explicite : tout est fermé sauf allowedTCPPorts ci-dessus
-  security.auditd.enable = true; # journalisation des actions système (utile pour la piste d'audit AgentOS)
+  security.auditd.enable = true; # journalisation des actions système (piste d'audit de l'infrastructure)
 
   # mkDefault: an installer-generated /etc/nixos/configuration.nix states the
   # NixOS release it installed (NixOS refuses two different plain definitions,

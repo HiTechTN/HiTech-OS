@@ -117,7 +117,7 @@ in
     };
 
     systemd.services.genio = {
-      description = "Genio — local AI daemon and dashboard";
+      description = "Genio — local service runtime and dashboard";
       wantedBy = [ "multi-user.target" ];
       after = [
         "network.target"

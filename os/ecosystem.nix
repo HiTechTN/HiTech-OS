@@ -1,5 +1,5 @@
 # HiTech-OS — provisionnement de l'écosystème d'outillage HiTechTN
-# (AgentOS + app2nix) sur le nœud patient-zero.
+# (services locaux + app2nix) sur le nœud patient-zero.
 #
 # Importé par ./installation.nix (donc patient-zero ET toute installation
 # Calamares) — jamais par l'ISO live (iso.nix) ni par le profil headless
@@ -9,9 +9,9 @@
 #
 # Audit du 22/10/2026 : avant cet ajout, patient-zero ne contenait NI git
 # NI docker (seule l'ISO live avait git — iso.nix), alors que :
-# - AgentOS (README, "Prerequisites") exige : git · docker · docker
-#   compose · bash 4+  — il s'installe via install.sh → docker compose up
-#   (stack PostgreSQL+pgvector, MinIO, Jaeger, services applicatifs).
+# - La pile de services locaux exige : git · docker · docker compose ·
+#   bash 4+ — elle s'installe via install.sh → docker compose up
+#   (PostgreSQL+pgvector, MinIO, Jaeger, services applicatifs).
 # - app2nix s'installe via Docker (`docker run ghcr.io/hitechtn/app2nix`),
 #   via pip (Python), ou nativement via SON propre flake.nix (donc nix
 #   flakes + nix-command — déjà activés dans ./common.nix).
@@ -23,17 +23,17 @@
 {
   # --- Outils de base requis par les deux outils ---
   environment.systemPackages = with pkgs; [
-    git # clone des dépôts AgentOS/app2nix + usage de leurs scripts
-    docker-compose # API `docker compose` (AgentOS : install.sh)
+    git # clone des dépôts de services/app2nix + usage de leurs scripts
+    docker-compose # API `docker compose` (services locaux : install.sh)
     python3 # chemin "pip" natif d'app2nix (pyproject.toml/uv.lock)
     uv # gestion d'environnement Python d'app2nix (recommandé par son repo)
   ];
 
-  # --- Conteneurs (AgentOS et app2nix recommandent tous les deux Docker) ---
+  # --- Conteneurs (les services locaux et app2nix utilisent Docker) ---
   virtualisation.docker.enable = true;
 
   # --- L'administrateur pilote Docker sans root (nécessaire pour
-  # `docker compose up -d` d'AgentOS en tant que hitechos) ---
+  # `docker compose up -d` des services locaux en tant que hitechos) ---
   users.users.hitechos.extraGroups = [ "docker" ];
 
   # NOTE Sécurité (à documenter lors du déploiement) : Docker publie ses

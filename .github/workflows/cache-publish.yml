@@ -36,6 +36,7 @@ on:
         required: false
         default: "patient-zero hitech-shell"
   push:
+    branches: [main]
     tags:
       - "cache-*"
 
@@ -49,13 +50,18 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
 
       - uses: cachix/install-nix-action@v27
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: ${{ runner.os }}-nix-cache-publish-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: ${{ runner.os }}-nix-cache-publish-
+          gc-max-store-size-linux: 10G
 
       - name: Configure restricted SSH access to the cache host
         env:

@@ -20,8 +20,9 @@
   boot.loader.grub.device = lib.mkDefault "/dev/sda";
 
   # --- Taille du disque de la VM de test (qemu-vm, build-vm) : 100 Go ---
-  # Nécessaire pour héberger AgentOS (stack Docker ~8 images) et des LLM
-  # locaux (poids des modèles GGUF) sans saturer le disque racine.
+  # Nécessaire pour héberger la pile Docker de services locaux (~8 images)
+  # et des modèles d'inférence locaux (poids des fichiers GGUF) sans saturer
+  # le disque racine.
   # `virtualisation.diskSize` est en Mo (100000 Mo ≈ 97,7 Go) et n'est
   # lu QUE par le module qemu-vm lors de `nixos-rebuild build-vm` :
   # totalement inerte sur une installation disque réelle (le module est

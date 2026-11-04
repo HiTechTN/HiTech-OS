@@ -16,6 +16,7 @@ concurrency:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +41,7 @@ jobs:
 
   python-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -64,15 +66,18 @@ jobs:
           cache: pip
           cache-dependency-path: ${{ matrix.component }}/requirements*.txt
       - name: Install dependencies
+        env:
+          REQUIREMENTS: ${{ matrix.requirements }}
         run: |
           python -m pip install --upgrade pip
-          printf '%s\n' "${{ matrix.requirements }}" > /tmp/requirements.txt
+          printf '%s\n' "$REQUIREMENTS" > /tmp/requirements.txt
           pip install -r /tmp/requirements.txt
       - name: Tests
         run: python -m pytest -q
 
   genio-web:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/genio/genio_web
@@ -90,76 +95,114 @@ jobs:
 
   nix-flake-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
-      - run: nix flake check --extra-experimental-features "nix-command flakes"
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: ${{ runner.os }}-nix-flake-${{ hashFiles('flake.lock', '**/Cargo.lock', 'apps/genio/genio_web/package-lock.json') }}
+          restore-prefixes-first-match: ${{ runner.os }}-nix-flake-
+          gc-max-store-size-linux: 5G
+      - name: Evaluate and test the flake
+        run: nix flake check --extra-experimental-features "nix-command flakes"
 
   os-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
-      - name: Build nixosConfigurations.patient-zero (variante QEMU)
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: ${{ runner.os }}-nix-os-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: ${{ runner.os }}-nix-os-
+          gc-max-store-size-linux: 5G
+      - name: Build patient-zero (QEMU variant)
         run: nix build .#nixosConfigurations.patient-zero.config.system.build.toplevel -L --extra-experimental-features "nix-command flakes"
-      - name: Taille de la closure (indicateur d'empreinte)
+      - name: Closure size
         run: du -sh result
 
   firmware:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
       - run: pip install platformio
-      - name: Secrets de build (placeholders — jamais les vrais identifiants)
+      - name: Build secrets (placeholders, never real credentials)
         working-directory: firmware/patient-zero/src
         run: cp secrets.h.example secrets.h
-      - name: Build firmware ESP32
+      - name: Build ESP32 firmware
         working-directory: firmware/patient-zero
         run: pio run
 
   iso-build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     permissions:
-      contents: write   # requis pour publier/mettre à jour la Release ci-dessous
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: live
+            attr: nixosConfigurations.iso.config.system.build.isoImage
+            artifact: hitechos-live-iso
+            release_tag: live-iso
+            title: "HiTech-OS — Live ISO (latest main build)"
+          - target: netinstaller
+            attr: nixosConfigurations.netinstaller.config.system.build.isoImage
+            artifact: hitechos-netinstaller-iso
+            release_tag: netinstaller-iso
+            title: "HiTech-OS — NetInstaller ISO (latest main build)"
+    concurrency:
+      group: iso-${{ matrix.release_tag }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
-      - name: Build de l'ISO live HiTech-OS
-        run: nix build .#nixosConfigurations.iso.config.system.build.isoImage -L --extra-experimental-features "nix-command flakes"
-      - name: Taille de l'ISO générée
-        run: du -sh result/iso/*
-      - name: Copier l'ISO hors du store Nix
+      - uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: ${{ runner.os }}-nix-${{ matrix.target }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: ${{ runner.os }}-nix-${{ matrix.target }}-
+          gc-max-store-size-linux: 10G
+      - name: Build ${{ matrix.target }} ISO
+        run: nix build ".#${{ matrix.attr }}" -L --extra-experimental-features "nix-command flakes"
+      - name: Copy ISO out of the Nix store
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp --dereference result/iso/*.iso dist/
-      - name: Générer le checksum SHA-256
+          ISO_PATH=$(find result/iso -maxdepth 1 -type f -name '*.iso' -print -quit)
+          test -n "$ISO_PATH"
+          cp --dereference "$ISO_PATH" dist/
+      - name: Generate SHA-256 checksum
         run: |
           set -euo pipefail
           ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
           test -n "$ISO_PATH"
           ISO_NAME=$(basename "$ISO_PATH")
-          sha256sum "$ISO_PATH" > "dist/$ISO_NAME.sha256"
-      - name: Découper l'ISO pour respecter la limite GitHub Releases
+          (cd dist && sha256sum "$ISO_NAME" > "$ISO_NAME.sha256")
+      - name: Split ISO for GitHub release limits
         run: |
           set -euo pipefail
           ISO_PATH=$(find dist -maxdepth 1 -type f -name '*.iso' -print -quit)
+          test -n "$ISO_PATH"
           split --bytes=1900M --numeric-suffixes=0 --suffix-length=2 \
             "$ISO_PATH" "$ISO_PATH.part-"
-      - name: Publier l'ISO comme artefact du run (téléchargeable depuis ce run)
+      - name: Upload boot media artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hitechos-live-iso
+          name: ${{ matrix.artifact }}
           path: |
             dist/*.iso
             dist/*.iso.sha256
-          retention-days: 90   # max habituellement autorisé pour un repo public
-      - name: Publier/mettre à jour la Release "live-iso"
-        if: github.event_name != 'pull_request'
+            dist/*.iso.part-*
+          retention-days: 30
+      - name: Publish or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -169,10 +212,12 @@ jobs:
           mapfile -t PARTS < <(find dist -maxdepth 1 -type f -name '*.iso.part-*' | sort)
           test -f "$ISO_PATH"
           test -f "$SHA_PATH"
-          test "${#PARTS[@]}" -gt 1
+          test "${#PARTS[@]}" -ge 1
+          ISO_NAME=$(basename "$ISO_PATH")
           ISO_SIZE=$(stat -c%s "$ISO_PATH")
-          gh release delete live-iso --yes --cleanup-tag || true
-          gh release create live-iso "${PARTS[@]}" "$SHA_PATH" \
-            --title "HiTech-OS — ISO live (dernier build de main)" \
-            --notes "ISO générée depuis le commit ${{ github.sha }} ($((ISO_SIZE / 1000 / 1000)) Mo). Téléchargez toutes les parties .iso.part-XX dans l’ordre, reconstruisez l’ISO avec \`cat *.iso.part-* > image.iso\`, puis vérifiez \`sha256sum --check *.iso.sha256\` avant de flasher." \
+          gh release delete "${{ matrix.release_tag }}" --yes --cleanup-tag || true
+          gh release create "${{ matrix.release_tag }}" "${PARTS[@]}" "$SHA_PATH" \
+            --target "$GITHUB_SHA" \
+            --title "${{ matrix.title }}" \
+            --notes "Built from commit \`$GITHUB_SHA\` ($((ISO_SIZE / 1000 / 1000)) MB). Download every \`.part-XX\` file in lexical order, reconstruct with \`cat ${ISO_NAME}.part-* > ${ISO_NAME}\`, and verify with \`sha256sum --check ${ISO_NAME}.sha256\` before flashing." \
             --prerelease

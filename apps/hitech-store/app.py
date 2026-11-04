@@ -1,11 +1,11 @@
-"""HiTech Drive — Central Sovereign Storage, Drive Explorer & AI Agent Artifact Hub.
+"""HiTech Drive — Central Sovereign Storage, Drive Explorer & Artifact Hub.
 
 Public explorer : GET /store
 Admin console   : GET /store/admin (OTP or optional GitHub OAuth, azmi.hitech@gmail.com only)
 Drive JSON API  : GET /api/drive/list, GET/HEAD /api/drive/download, POST /api/drive/upload
 Auth JSON API   : POST /api/auth/quick-otp, POST /api/auth/verify-otp (alias: /verify), GET /api/auth/me
 GitHub OAuth    : GET /auth/github, GET /auth/github/callback (env-gated + login allow-list)
-Agent API       : POST /api/v1/artifacts/upload, GET /api/v1/artifacts/list,
+Artifact API    : POST /api/v1/artifacts/upload, GET /api/v1/artifacts/list,
                   POST /api/v1/artifacts/create-share-link, GET /share/{path}
 """
 import fcntl
@@ -74,7 +74,7 @@ SESSION_HOURS = 12
 MAX_UPLOAD_BYTES = 15 * 1024**3  # 15 Go
 CHUNK = 1024 * 1024 * 4
 
-ALLOWED_AGENT_FOLDERS = {"genio", "opencode", "claude", "shared"}
+ALLOWED_AGENT_FOLDERS = {"genio", "shared"}
 UPLOAD_FOLDERS = {"public", "private"} | {f"agents/{a}" for a in ALLOWED_AGENT_FOLDERS}
 
 PREVIEW_AUDIO = {".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac", ".opus"}
@@ -120,7 +120,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("hitech-drive")
 if not AGENT_SHARED_SECRET:
-    log.warning("AGENT_SHARED_SECRET empty — agent API disabled until set in .env")
+    log.warning("AGENT_SHARED_SECRET empty — artifact API disabled until set in .env")
 
 app = FastAPI(title="HiTech Drive Engine")
 # CORS for the HCF client (client.hitech.tn) with admin-cookie credentials.
@@ -133,7 +133,7 @@ app.add_middleware(
 # Trust the reverse proxy (Traefik/Nginx) so request.url.scheme reflects the
 # real client scheme via X-Forwarded-Proto. Without this, TLS terminated
 # upstream leaves the app thinking it is on plain HTTP, which breaks the
-# secure=True session cookie flow (F3 in GEMINI_EYES_REPORT).
+# secure=True session cookie flow (F3 in the security review).
 # Keep the proxy network trusted-only in production (e.g. ["127.0.0.1"]).
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=["*"])
 # OTP state is shared across uvicorn workers via a locked runtime file
@@ -1400,7 +1400,7 @@ async def share_folder_page(folder_path: str, request: Request, token: str = "")
 </div></body></html>""")
 
 
-# ------------------------------------------------------- AGENT ARTIFACT API
+# ------------------------------------------------------- ARTIFACT API
 class ShareLinkBody(BaseModel):
     path: str
     ttl_min: int = 60
@@ -1418,7 +1418,7 @@ async def artifact_upload(request: Request, folder: str = Form("shared"),
         raise HTTPException(status_code=401, detail="X-Agent-Token invalide.")
     folder = (folder or "shared").strip().strip("/")
     if folder not in ALLOWED_AGENT_FOLDERS:
-        raise HTTPException(status_code=400, detail="Dossier agent invalide (genio/opencode/claude/shared).")
+        raise HTTPException(status_code=400, detail="Dossier d'artefacts invalide (genio/shared).")
     name = safe_name(file.filename or "unnamed")
     dest_dir = resolve_drive_path(f"agents/{folder}")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -1435,7 +1435,7 @@ async def artifact_upload(request: Request, folder: str = Form("shared"),
             buf.write(chunk)
             sha.update(chunk)
     sha_sidecar(target).write_text(sha.hexdigest() + f"  {name}\n")
-    log.info(f"Agent artifact upload agents/{folder}/{name} ({total} bytes)")
+    log.info(f"Artifact upload agents/{folder}/{name} ({total} bytes)")
     return {"ok": True, "path": f"agents/{folder}/{name}",
             "size": total, "sha256": sha.hexdigest()}
 
@@ -1446,7 +1446,7 @@ async def artifact_list(request: Request, folder: str = "shared"):
         raise HTTPException(status_code=401, detail="X-Agent-Token invalide.")
     folder = (folder or "shared").strip().strip("/")
     if folder not in ALLOWED_AGENT_FOLDERS:
-        raise HTTPException(status_code=400, detail="Dossier agent invalide.")
+        raise HTTPException(status_code=400, detail="Dossier d'artefacts invalide.")
     target = resolve_drive_path(f"agents/{folder}")
     target.mkdir(parents=True, exist_ok=True)
     return {"folder": f"agents/{folder}",

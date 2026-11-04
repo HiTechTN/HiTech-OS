@@ -7,9 +7,9 @@
 # Il regroupe les modules qui doivent exister sur TOUTE installation
 # HiTech-OS, y compris après une installation Calamares vierge :
 #   - common.nix      : socle, durcissement, MQTT/InfluxDB, git/curl
-#   - ecosystem.nix   : Docker/AgentOS/app2nix
+#   - ecosystem.nix   : Docker/services locaux/app2nix
 #   - hitech-store    : portail de stockage, actif par défaut
-#   - genio           : daemon IA local + dashboard, actif par défaut
+#   - genio           : runtime local + dashboard, actif par défaut
 #   - secrets         : déchiffrement sops optionnel au premier boot
 #   - hitech-cache    : cache binaire Harmonia (serveur désactivé par défaut ;
 #                       client activable, Phase 8 NetInstaller/OTA)

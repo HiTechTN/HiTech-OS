@@ -1,4 +1,4 @@
-"""Behavioural tests for the HiTech-Store public/agent/admin surfaces."""
+"""Behavioural tests for the HiTech-Store public/artifact/admin surfaces."""
 from __future__ import annotations
 
 import json

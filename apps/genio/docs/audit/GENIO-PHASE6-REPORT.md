@@ -193,7 +193,7 @@ Other endpoints keep strict non-2xx handling (`ApiError`).
 ## 7. Verification evidence
 
 Environment: Pop!_OS 22.04, Node 22.23.3 / npm 10.9.9, daemon on
-`127.0.0.1:8770`, state `/tmp/opencode/genio-state`, browser 1440×900 @ DPR 2.
+`127.0.0.1:8770`, state `/tmp/hitech-genio/genio-state`, browser 1440×900 @ DPR 2.
 
 | Check | Result |
 | --- | --- |
@@ -231,8 +231,8 @@ npm run build
 
 # daemon (mounts dist at /ui only if it exists at startup)
 cd ../genio_server
-GENIO_STATE_DIR=/tmp/opencode/genio-state \
-  /tmp/opencode/genio-venv/bin/python daemon.py --port 8770
+GENIO_STATE_DIR=/tmp/hitech-genio/genio-state \
+  /tmp/hitech-genio/genio-venv/bin/python daemon.py --port 8770
 ```
 
 Open `http://127.0.0.1:8770/` → `/ui/`. For development use `npm run dev`

@@ -13,7 +13,7 @@ Base commit: `2053f58` (Phase 7) + Phase 8 working tree
 > install can succeed without the lab `/hostrepo` override.
 
 This document is the master reference for the Phase 8 pivot. It is deliberately
-written so that a future agent can resume without re-reading the whole repo.
+written so that a future maintainer can resume without re-reading the whole repo.
 
 ---
 

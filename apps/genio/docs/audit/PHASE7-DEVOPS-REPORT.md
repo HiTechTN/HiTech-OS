@@ -41,7 +41,7 @@ usable for later rebuilds. The ISO keeps its own git for the installer.
 `os/installation.nix` is the single post-install entry point. It imports:
 
 - `common.nix` — base, hardening, MQTT/InfluxDB, git/curl;
-- `ecosystem.nix` — Docker/AgentOS/app2nix tooling;
+- `ecosystem.nix` — Docker/local-services/app2nix tooling;
 - `services/hitech-store.nix`;
 - `services/genio.nix`;
 - `services/secrets.nix`.

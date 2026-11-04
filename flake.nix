@@ -1,5 +1,5 @@
 {
-  description = "HiTech-OS — Sovereign, local-first, AI-first OS for IoT & Smart Infrastructure";
+  description = "HiTech-OS — Sovereign, reproducible edge operating system for IoT & Smart Infrastructure";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -12,7 +12,7 @@
         pkgs = import nixpkgs { inherit system; };
       in
       {
-        # `nix develop` — environnement de dev pour le démon IA (Rust)
+        # `nix develop` — Rust, Wayland and telemetry development shell.
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             rustc

@@ -1,4 +1,4 @@
-//! HiTech-OS AI Daemon — entry point.
+//! HiTech-OS local inference daemon — entry point.
 //!
 //! Phase 4 : integration reelle du backend GGUF/llama.cpp avec chargement
 //! mmap zero-copy (comportement par defaut de llama.cpp), + backend CUDA
@@ -41,8 +41,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // TODO Phase 5 (AgentOS) :
-    // - exposer une interface (socket local / MQTT) pour que l'agent
-    //   consomme ce backend au lieu d'un appel direct en ligne de commande
+    // TODO Phase 5 (autonomy layer):
+    // - expose a local socket / MQTT interface so the service layer can
+    //   consume this backend instead of a direct command-line call.
     Ok(())
 }

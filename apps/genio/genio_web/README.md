@@ -48,8 +48,8 @@ npm run build          # tsc --noEmit && vite build → dist/
 
 # restart the daemon so it mounts the fresh dist
 cd ../genio_server
-GENIO_STATE_DIR=/tmp/opencode/genio-state \
-  /tmp/opencode/genio-venv/bin/python daemon.py --port 8770
+GENIO_STATE_DIR=/tmp/hitech-genio/genio-state \
+  /tmp/hitech-genio/genio-venv/bin/python daemon.py --port 8770
 ```
 
 Open `http://127.0.0.1:8770/` (307 → `/ui/`) or `http://127.0.0.1:8770/ui/`.

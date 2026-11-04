@@ -58,9 +58,9 @@ déploiements où les sessions doivent survivre à un reboot.
 ### F-02 — ÉLEVÉ — Mot de passe MQTT placeholder + port 1883 ouvert — **ACTION DE DÉPLOIEMENT**
 
 **Constat.** `common.nix` ouvre `1883/tcp` par défaut et le fichier
-`/run/secrets/mosquitto-hitechos-agent` contient le hash sha512-crypt du mot de
+`/run/secrets/mosquitto-hitechos-node` contient le hash sha512-crypt du mot de
 passe littéral `placeholder-change-me` tant que sops n'a rien déployé. Un
-attaquant réseau peut donc s'authentifier comme agent et lire/écrire
+attaquant réseau peut donc s'authentifier comme nœud et lire/écrire
 `hitechos/#`.
 
 **Mitigation.** C'est un choix « fail-open availability » assumé pour éviter
@@ -68,11 +68,11 @@ que le broker bloque le premier boot. Toute exposition réseau **doit**
 précéder la mise en place de secrets réels.
 
 **Recommandation.** Avant tout déploiement exposé :
-1. Générer le hash réel (`mosquitto_passwd -b -c /tmp/f hitechos-agent <mdp>`)
+1. Générer le hash réel (`mosquitto_passwd -b -c /tmp/f hitechos-node <mdp>`)
    puis le déployer via sops (sans préfixe `user:`) ;
 2. Restreindre `allowedTCPPorts` à l'interface/VPN de télémétrie ou passer par
    un reverse-proxy MQTT/TLS ;
-3. Vérifier `mosquitto_sub -h <host> -u hitechos-agent -P placeholder-change-me`
+3. Vérifier `mosquitto_sub -h <host> -u hitechos-node -P placeholder-change-me`
    échoue (test négatif de non-régression).
 
 ### F-03 — MOYEN — `DEV_OTP_FALLBACK=1` par défaut — **DOCUMENTÉ**
@@ -98,7 +98,7 @@ TLS avec `cookieSecure = true` lorsque l'accès distant est nécessaire.
 ### F-05 — MOYEN — `hitechos` dans le groupe `docker` — **DOCUMENTÉ**
 
 **Constat.** `os/ecosystem.nix` ajoute l'administrateur au groupe `docker` pour
-`docker compose up` (AgentOS/app2nix). Le groupe `docker` est équivalent à root
+`docker compose up` (services locaux/app2nix). Le groupe `docker` est équivalent à root
 (montage de `/` dans un conteneur privilégié).
 
 **Recommandation.** Acceptable sur un nœud d'admin dédié. Pour un nœud exposé,
@@ -169,7 +169,7 @@ avant tout parc B2B.
 
 - `apps/hitech-store/tests/test_store.py` : 14 tests (auth OTP, tentatives,
   isolation `private`/`agents`, traversée, upload/checksum, partages, token
-  agent).
+  d'artefacts).
 - `hitech-installer/src/main.rs` : 18 tests (validation de requête, échappement
   Nix/JSON, parsing `lsblk`, chemins NVMe, plan git, troncature des logs).
 - `apps/hitech-shell/src/*` : 10 tests (layouts, parsing d'environnement).
