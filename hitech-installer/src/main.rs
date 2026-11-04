@@ -19,6 +19,9 @@ use std::time::Duration;
 
 const MIN_DISK_BYTES: u64 = 1024 * 1024 * 1024;
 const INSTALL_LOG_LIMIT: usize = 48_000;
+const DEFAULT_REPO_URL: &str = "https://github.com/HiTechTN/HiTech-OS.git";
+const LIVE_SOURCE_DIR: &str = "/etc/hitech-os-source";
+const TARGET_REPO_DIR: &str = "/mnt/etc/nixos/hitech-os";
 
 #[derive(Clone, Default)]
 struct InstallStatus {
@@ -546,7 +549,7 @@ fn install_steps(req: &InstallRequest, state: &Arc<Mutex<InstallStatus>>) -> Res
     set_status(state, 24, "Generating hardware configuration…");
     run_checked(state, "nixos-generate-config", &["--root", "/mnt"])?;
 
-    set_status(state, 28, "Fetching the pinned HiTech-OS profile…");
+    set_status(state, 28, "Provisioning the pinned HiTech-OS profile…");
     fetch_profile(state)?;
 
     set_status(
@@ -558,6 +561,7 @@ fn install_steps(req: &InstallRequest, state: &Arc<Mutex<InstallStatus>>) -> Res
     let config = target_config(req, &hash);
     root_mkdir(state, "/mnt/etc/nixos")?;
     root_write(state, "/mnt/etc/nixos/configuration.nix", &config)?;
+    verify_target_profile()?;
 
     let fallback = env::var("HITECH_ALLOW_SOURCE_FALLBACK")
         .map(|v| v != "false" && v != "0")
@@ -748,35 +752,134 @@ fn unmount_path(path: &str, state: &Arc<Mutex<InstallStatus>>) {
     }
 }
 
+fn resolve_repo_url(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_REPO_URL)
+        .to_string()
+}
+
+fn resolve_repo_ref(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("main")
+        .to_string()
+}
+
+fn profile_is_complete(repo: &Path) -> bool {
+    ["flake.nix", "os/installation.nix", "os/common.nix"]
+        .iter()
+        .all(|rel| repo.join(rel).is_file())
+}
+
+/// Copy the complete live-ISO source bundle into the target.
+///
+/// The runner is injected so the exact command sequence is unit-testable
+/// without requiring root, sudo, or a real /mnt.
+fn provision_profile_from_source<F>(source: &Path, dest: &Path, mut runner: F) -> Result<(), String>
+where
+    F: FnMut(&str, &[&str]) -> Result<(), String>,
+{
+    if !source.is_dir() {
+        return Err(format!(
+            "offline source bundle is missing: {}",
+            source.display()
+        ));
+    }
+    let source_arg = format!("{}/.", source.display());
+    let dest_arg = dest.display().to_string();
+    runner("rm", &["-rf", &dest_arg])?;
+    runner("mkdir", &["-p", &dest_arg])?;
+    runner("cp", &["-rL", &source_arg, &dest_arg])?;
+    runner("chmod", &["-R", "u+w", &dest_arg])?;
+    // A copied .git directory is never part of the installed profile and may
+    // contain absolute worktree paths from the ISO build. Keep the target
+    // tree immutable in intent, but writable for nixos-install.
+    let git_dir = dest.join(".git");
+    if git_dir.exists() {
+        runner("rm", &["-rf", &git_dir.display().to_string()])?;
+    }
+    if !profile_is_complete(dest) {
+        return Err(format!(
+            "offline source bundle is incomplete: {}",
+            dest.display()
+        ));
+    }
+    Ok(())
+}
+
 fn fetch_profile(state: &Arc<Mutex<InstallStatus>>) -> Result<(), String> {
-    let url = env::var("HITECH_REPO_URL").unwrap_or_default();
-    if url.trim().is_empty() {
+    let url = resolve_repo_url(env::var("HITECH_REPO_URL").ok().as_deref());
+    let refname = resolve_repo_ref(env::var("HITECH_REPO_REF").ok().as_deref());
+    let dest = Path::new(TARGET_REPO_DIR);
+    let source = Path::new(LIVE_SOURCE_DIR);
+
+    // Offline-first: both ISOs embed the complete repository at
+    // /etc/hitech-os-source. This path never depends on the network, a git
+    // credential, or an empty environment variable.
+    if source.is_dir() {
         append_log(
             state,
-            "HITECH_REPO_URL is empty; installing a generic NixOS profile.",
+            &format!(
+                "offline source bundle found: {} -> {}",
+                source.display(),
+                dest.display()
+            ),
         );
-        return Ok(());
+        let result = provision_profile_from_source(source, dest, |program, args| {
+            run_checked(state, program, args)
+        });
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => append_log(
+                state,
+                &format!("WARN: offline source bundle unusable ({error}); falling back to git"),
+            ),
+        }
     }
-    let dest = "/mnt/etc/nixos/hitech-os";
-    if Path::new(dest).exists() {
-        run_checked(state, "rm", &["-rf", dest])?;
-    }
-    let refname = env::var("HITECH_REPO_REF").unwrap_or_else(|_| "main".to_string());
+
     append_log(
         state,
         &format!(
-            "git fetch {} ({}) -> {dest}",
-            url.trim(),
-            if refname.trim().is_empty() {
-                "HEAD"
-            } else {
-                refname.trim()
-            }
+            "fetching HiTech-OS profile {url} ({refname}) -> {}",
+            dest.display()
         ),
     );
-    for args in git_fetch_plan(dest, url.trim(), &refname) {
+    if dest.exists() {
+        run_checked(state, "rm", &["-rf", TARGET_REPO_DIR])?;
+    }
+    for args in git_fetch_plan(TARGET_REPO_DIR, &url, &refname) {
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         run_checked(state, "git", &refs)?;
+    }
+    if !profile_is_complete(dest) {
+        return Err(format!(
+            "HiTech-OS profile is incomplete after git fetch: {}/os/installation.nix",
+            TARGET_REPO_DIR
+        ));
+    }
+    Ok(())
+}
+
+fn verify_target_profile() -> Result<(), String> {
+    let repo = Path::new(TARGET_REPO_DIR);
+    let installation = repo.join("os/installation.nix");
+    if !installation.is_file() {
+        return Err(format!(
+            "pre-flight failed: required path '{}' does not exist",
+            installation.display()
+        ));
+    }
+    let config_path = Path::new("/mnt/etc/nixos/configuration.nix");
+    let config = fs::read_to_string(config_path)
+        .map_err(|e| format!("pre-flight: cannot read {}: {e}", config_path.display()))?;
+    if !config.contains("./hitech-os/os/installation.nix") {
+        return Err(format!(
+            "pre-flight failed: {} does not import ./hitech-os/os/installation.nix",
+            config_path.display()
+        ));
     }
     Ok(())
 }
@@ -1603,6 +1706,97 @@ mod tests {
             root_partition: "/dev/sda2".to_string(),
             efi_partition: "/dev/sda1".to_string(),
         }
+    }
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("hitech-installer-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create test dir");
+        dir
+    }
+
+    fn command_runner(program: &str, args: &[&str]) -> Result<(), String> {
+        let status = Command::new(program)
+            .args(args)
+            .status()
+            .map_err(|e| format!("{program}: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("{program} exited with {status}"))
+        }
+    }
+
+    fn make_source_fixture(root: &Path) {
+        fs::create_dir_all(root.join("os")).expect("source os dir");
+        fs::write(root.join("flake.nix"), "{}\n").expect("source flake");
+        fs::write(root.join("os/installation.nix"), "{}\n").expect("source installation");
+        fs::write(root.join("os/common.nix"), "{}\n").expect("source common");
+    }
+
+    #[test]
+    fn empty_or_missing_repo_url_uses_the_hardcoded_hitech_remote() {
+        assert_eq!(resolve_repo_url(None), DEFAULT_REPO_URL);
+        assert_eq!(resolve_repo_url(Some("")), DEFAULT_REPO_URL);
+        assert_eq!(resolve_repo_url(Some("   ")), DEFAULT_REPO_URL);
+        assert_eq!(
+            resolve_repo_url(Some(" https://example.invalid/HiTech-OS.git ")),
+            "https://example.invalid/HiTech-OS.git"
+        );
+        assert_eq!(resolve_repo_ref(None), "main");
+        assert_eq!(resolve_repo_ref(Some("")), "main");
+        assert_eq!(resolve_repo_ref(Some(" a8b8d41 ")), "a8b8d41");
+    }
+
+    #[test]
+    fn offline_source_populates_target_profile_without_repo_url() {
+        let root = test_dir("offline-profile");
+        let source = root.join("source");
+        let target = root.join("target/etc/nixos/hitech-os");
+        make_source_fixture(&source);
+
+        // HITECH_REPO_URL is deliberately absent in this test: the offline
+        // bundle is the only source, exactly like the physical ISO path.
+        provision_profile_from_source(&source, &target, command_runner)
+            .expect("offline provisioning must succeed");
+        assert!(profile_is_complete(&target));
+        assert!(target.join("os/installation.nix").is_file());
+
+        let cfg = target_config(&request("erase"), "$6$test");
+        assert!(cfg.contains("./hitech-os/os/installation.nix"));
+        assert!(cfg.contains("services.hitech-shell.enable = true;"));
+        assert!(!cfg.contains("generic NixOS"));
+
+        let config_path = root.join("target/etc/nixos/configuration.nix");
+        fs::write(&config_path, &cfg).expect("write generated configuration");
+        if let Some(nix) = [
+            "nix-instantiate",
+            "/nix/var/nix/profiles/default/bin/nix-instantiate",
+        ]
+        .iter()
+        .find(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+        {
+            let status = Command::new(nix)
+                .args(["--parse", config_path.to_str().expect("utf-8 path")])
+                .status()
+                .expect("run nix-instantiate");
+            assert!(status.success(), "generated configuration.nix must parse");
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incomplete_offline_source_fails_before_install() {
+        let root = test_dir("incomplete-profile");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("os")).expect("source dir");
+        fs::write(source.join("flake.nix"), "{}\n").expect("flake");
+        let error = provision_profile_from_source(&source, &target, command_runner)
+            .expect_err("missing installation.nix must fail");
+        assert!(error.contains("incomplete"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

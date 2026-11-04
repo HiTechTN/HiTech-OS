@@ -1,7 +1,7 @@
 # HiTech-OS — Roadmap & Décisions d'Architecture (v2, post-refonte)
 
 *Document de référence pour le pivot Vibe-OS → HiTech-OS*
-*Fondateur : Mohamed Azmi Kaaniche — HiTechTN / HiTechLab*
+*Fondateur : Mohamed Azmi Kaaniche (AZMI) — HiTechTN / HiTechLab*
 
 ---
 
@@ -52,7 +52,7 @@ Décision : remplacer l'ISO graphique lourde (GNOME + Flatpak + Firefox, ~1,9 Go
 
 - **NetInstaller** (`nixosConfigurations.netinstaller`, `os/netinstaller.nix`) : base `installation-cd-base` élaguée (channel Nixpkgs embarqué désactivé, firmware « tout matériel » désactivé, ZFS/RAID/OpenSSH désactivés), kiosque Wayland `cage` + `hitech-installer` (Rust `eframe`/`egui`), `NIX_PATH` pointé sur la révision Nixpkgs exacte via tarball GitHub. Les paquets de base (bash/coreutils, getty) sont conservés ; seuls 90 Mio de firmware `amdgpu` sont ajoutés. Mesure actuelle : **823 Mio**, au-dessus de la cible ~800 Mo ; boot QEMU validé (autologin série, `cage` actif, GUI rendue), installation complète encore à tester (voir `docs/audit/PHASE8-NETINSTALLER-RUST-DE.md`).
 - **Final ISO paths & sizes** (2026-10-28): NetInstaller 2.0 GiB at `/nix/store/4kja6i8ic8iwlfx0ykcrp84z86d3d5mv-nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-netinstaller-26.11.20260919.20b1ddd-x86_64-linux.iso`; Live GNOME 3.4 GiB at `/nix/store/q32xbfdakzxmv70q5mhg6ph7yjv03zcv-nixos-26.11.20260919.20b1ddd-x86_64-linux.iso/iso/nixos-26.11.20260919.20b1ddd-x86_64-linux.iso`.
-- **Source de configuration** : le GUI Rust partitionne/formate/monte la cible, clone `github:HiTechTN/HiTech-OS` à la révision `self.rev` gravée dans l'ISO, ajoute l'import `./hitech-os/os/installation.nix` au `configuration.nix` généré, puis `nixos-install` applique le profil HiTech-OS.
+- **Source de configuration** : le GUI Rust partitionne/formate/monte la cible, copie d'abord le bundle embarqué `/etc/hitech-os-source` (offline-first, `cp -rL`) vers `/mnt/etc/nixos/hitech-os` et ne retombe sur un clone de `github:HiTechTN/HiTech-OS` que si le bundle est absent ; il vérifie ensuite que `os/installation.nix` et l'import `./hitech-os/os/installation.nix` existent dans `configuration.nix` (pré-vol strict), puis `nixos-install` applique le profil HiTech-OS. Aucune intervention terminal n'est requise.
 - **Identité** : formulaire anonyme (nom d'utilisateur, hôte, mot de passe) ; aucun mot de passe live codé en dur.
 - **Binary cache HiTech-Store** (`services.hitech-cache`) : Harmonia signe les closures cibles ; le NetInstaller et les nœuds patient-zero s'abonnent au cache avec une clé publique `hitechos-cache-1`. `nix-serve` n'est qu'une alternative documentée (pas de signature). Publication : `scripts/publish-cache.sh` + `scripts/sign-cache-closure.sh` + `.github/workflows/cache-publish.yml` — la CI copie les closures via une clé SSH restreinte et c'est l'hôte du cache qui signe (jamais de clé privée dans les secrets CI).
 - **HiTech-Shell** (`apps/hitech-shell`, `services.hitech-shell`) : scaffold Rust Wayland (Smithay pour le compositeur, Slint/Iced pour le chrome) avec option déclarative `services.hitech-shell.layout = "hybrid" | "mac" | "windows"`. Le binaire Phase 8 est volontairement sans dépendance pour que la CI et le cache restent rapides ; l'implémentation réelle est l'itération suivante.

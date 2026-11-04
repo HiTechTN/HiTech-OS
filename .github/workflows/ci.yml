@@ -100,6 +100,22 @@ jobs:
       - name: Type-check and build
         run: npm run build
 
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap unit tests
+        run: bash bootstrap/tests/test-bootstrap.sh
+      - name: Bootstrap dry-run (orion)
+        run: ./bootstrap/hitech-bootstrap.sh --profile orion --dry-run
+      - name: Bootstrap dry-run (minimal)
+        run: ./bootstrap/hitech-bootstrap.sh --profile minimal --dry-run
+      - name: Bootstrap syntax
+        run: |
+          bash -n bootstrap/hitech-bootstrap.sh
+          python3 -m py_compile os/calamares-main.patch.py
+
   nix-flake-check:
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -111,6 +127,13 @@ jobs:
           primary-key: ${{ runner.os }}-nix-flake-${{ hashFiles('flake.lock', '**/Cargo.lock', 'apps/genio/genio_web/package-lock.json') }}
           restore-prefixes-first-match: ${{ runner.os }}-nix-flake-
           gc-max-store-size-linux: 5G
+      - name: Verify offline installer source contract
+        run: |
+          set -euo pipefail
+          grep -Fq 'environment.etc."hitech-os-source".source = self;' os/iso.nix
+          grep -Fq 'environment.etc."hitech-os-source".source = self;' os/netinstaller.nix
+          grep -Fq 'DEFAULT_REPO_URL' hitech-installer/src/main.rs
+          grep -Fq 'verify_target_profile' hitech-installer/src/main.rs
       - name: Evaluate and test the flake
         run: nix flake check --extra-experimental-features "nix-command flakes"
 

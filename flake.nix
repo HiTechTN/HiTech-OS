@@ -44,16 +44,51 @@
           hitech-shell = pkgs.callPackage ./apps/hitech-shell { };
           hitech-installer = pkgs.callPackage ./hitech-installer { };
           ai-daemon = pkgs.callPackage ./ai-daemon { };
+          genio = pkgs.callPackage ./apps/genio { };
+          hitech-store = pkgs.callPackage ./apps/hitech-store { };
+          # Portable dependencies installed by bootstrap/hitech-bootstrap.sh
+          # on Debian/Arch/Fedora/WSL2 so the runtime is not tied to the host
+          # distribution's package versions.
+          foot = pkgs.foot;
+          mosquitto = pkgs.mosquitto;
+          influxdb2 = pkgs.influxdb2;
+          telegraf = pkgs.telegraf;
+          hitech-bootstrap = pkgs.callPackage ./bootstrap { };
         };
       }
-    ) // {
-      # Phase 8 NetInstaller: minimal Calamares ISO that pulls the HiTech-OS
-      # configuration from GitHub and the target closure from the
+    ) // (let
+      # Universal bootstrap targets. On a NixOS host, hitech-bootstrap copies
+      # the host's hardware/configuration files into this flake tree as
+      # host/configuration.nix before running:
+      #   nixos-rebuild boot --flake /etc/nixos/hitech-os#orion
+      # The if-expression is evaluated relative to the flake source, so it is
+      # pure-eval safe both in CI and on the target.
+      hostConfiguration =
+        if builtins.pathExists ./host/configuration.nix
+        then ./host/configuration.nix
+        else if builtins.pathExists ./host-configuration.nix
+        then ./host-configuration.nix
+        else ./os/configuration.nix;
+      mkProfile = profile: nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = {
+          self = self;
+          hitechosRevision = self.rev or "main";
+        };
+        modules = [
+          hostConfiguration
+          (./os/profiles + "/${profile}.nix")
+        ];
+      };
+    in {
+      # Phase 8 NetInstaller: minimal Cage/ORION-X ISO with the complete
+      # source tree at /etc/hitech-os-source and the target closure from the
       # HiTech-Store/Harmonia binary cache. `self.rev` is baked in as the
       # default repoRef so release builds are reproducible.
       nixosConfigurations.netinstaller = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         specialArgs = {
+          self = self;
           hitechosRevision = self.rev or "main";
         };
         modules = [
@@ -67,8 +102,15 @@
 
       nixosConfigurations.patient-zero = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
+        specialArgs = { self = self; };
         modules = [ ./os/configuration.nix ];
       };
+
+      # Universal morphing profiles consumed by bootstrap/hitech-bootstrap.sh.
+      nixosConfigurations.orion = mkProfile "orion";
+      nixosConfigurations.edge = mkProfile "edge";
+      nixosConfigurations.server = mkProfile "server";
+      nixosConfigurations.minimal = mkProfile "minimal";
 
       # ISO live/installeur graphique (GNOME + notre Calamares patché +
       # Firefox + Flatpak), générée à chaque push par la CI (voir
@@ -76,6 +118,7 @@
       #   nix build .#nixosConfigurations.iso.config.system.build.isoImage
       nixosConfigurations.iso = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
+        specialArgs = { self = self; };
         modules = [
           # Module officiel NixOS — résolu via l'input nixpkgs du flake
           # (déterministe), plutôt que <nixpkgs/...> qui dépend de NIX_PATH.
@@ -88,5 +131,5 @@
           ./os/iso.nix
         ];
       };
-    };
+    });
 }

@@ -6,9 +6,10 @@
 #   - git + curl,
 #   - the NixOS installer machinery.
 #
-# The actual HiTech-OS closure is NOT in the ISO. The graphical installer:
+# The target closure is NOT in the ISO, but the complete HiTech-OS source tree
+# IS embedded at /etc/hitech-os-source. The graphical installer:
 #   1. partitions/formats/mounts the target,
-#   2. fetches the HiTech-OS profile pinned to the ISO's revision from GitHub,
+#   2. copies the embedded source tree offline-first (git is only a fallback),
 #   3. writes the operator's anonymous identity into configuration.nix,
 #   4. calls `nixos-install` with the HiTech-Store binary cache as the primary
 #      substituter, so the target closure is downloaded instead of rebuilt.
@@ -24,7 +25,7 @@
 #     has a stable release; it prevents a compromised/down cache from silently
 #     rebuilding unvetted source on the target.
 
-{ config, lib, pkgs, hitechosRevision ? "main", ... }:
+{ config, lib, pkgs, self, hitechosRevision ? "main", ... }:
 
 let
   cfg = config.hitechos.netinstaller;
@@ -149,6 +150,11 @@ in
 
   config = lib.mkIf cfg.enable {
     # --- Base live system -------------------------------------------------
+    # Offline-first installer source bundle. `self` is the flake source
+    # (tracked files only), so the live ISO carries the exact revision that
+    # built it without .git, result symlinks, or local artifacts.
+    environment.etc."hitech-os-source".source = self;
+
     networking.hostName = "hitechos-netinstaller";
     networking.networkmanager.enable = true;
 

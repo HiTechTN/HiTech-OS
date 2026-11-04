@@ -32,3 +32,6 @@ firmware/patient-zero/.pio/
 *.log
 firmware/patient-zero/src/secrets.h
 *.qcow2
+
+# Bootstrap-generated host configuration (NixOS target only)
+/host/

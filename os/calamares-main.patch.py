@@ -86,39 +86,49 @@ text = text.replace(old_install, new_install, 1)
 #    and add the import line so services.hitech-shell is available during the
 #    install evaluation (the old flow cloned git AFTER nixos-install, which was
 #    too late).
-bundle_code = (
-    '        # HiTech-OS: copy bundled source from ISO and add installation.nix import\n'
-    '        # so services.hitech-shell is available during nixos-install evaluation.\n'
-    '        import shutil\n'
-    '        hitech_src = Path("/etc/hitech-os-source")\n'
-    '        if hitech_src.exists():\n'
-    '            target_repo = Path(variables["root"] + "/etc/nixos/hitech-os")\n'
-    '            import_rel = "./hitech-os/os/installation.nix"\n'
-    '            if target_repo.exists():\n'
-    '                shutil.rmtree(target_repo)\n'
-    '            shutil.copytree(hitech_src, target_repo, symlinks=False)\n'
-    '            cfg_path = Path(variables["root"] + "/etc/nixos/configuration.nix")\n'
-    '            if cfg_path.exists():\n'
-    '                cfg_text = cfg_path.read_text()\n'
-    '                if import_rel not in cfg_text:\n'
-    '                    lines = cfg_text.splitlines(True)\n'
-    '                    out = []\n'
-    '                    inserted = False\n'
-    '                    for line in lines:\n'
-    '                        out.append(line)\n'
-    '                        if not inserted and "hardware-configuration.nix" in line:\n'
-    '                            out.append(f"    {import_rel}\\n")\n'
-    '                            inserted = True\n'
-    '                    cfg_path.write_text("".join(out))\n'
-)
+bundle_code = '''    # HiTech-OS: copy bundled source from ISO and add installation.nix import
+    # so services.hitech-shell is available during nixos-install evaluation.
+    import os
+    import re
+    import shutil
+    hitech_src = Path("/etc/hitech-os-source")
+    if hitech_src.exists():
+        target_repo = Path(root_mount_point + "/etc/nixos/hitech-os")
+        import_rel = "./hitech-os/os/installation.nix"
+        if target_repo.exists():
+            shutil.rmtree(target_repo)
+        shutil.copytree(hitech_src, target_repo, symlinks=False)
+        # Nix store inputs are read-only; make the copied tree writable so
+        # the installer can patch/reuse it idempotently.
+        for dirpath, dirnames, filenames in os.walk(target_repo):
+            for name in dirnames + filenames:
+                copied = Path(dirpath) / name
+                if not copied.is_symlink():
+                    copied.chmod(copied.stat().st_mode | 0o200)
+        cfg_path = Path(root_mount_point + "/etc/nixos/configuration.nix")
+        if cfg_path.exists():
+            cfg_text = cfg_path.read_text()
+            if import_rel not in cfg_text:
+                # Keep the import inside the existing `imports = [ ... ]`
+                # list; a second `imports =` attribute would be invalid.
+                match = re.search(r"imports\\s*=\\s*\\[", cfg_text)
+                if match:
+                    cfg_text = cfg_text[:match.end()] + "\\n    " + import_rel + cfg_text[match.end():]
+                else:
+                    cfg_text = re.sub(r"^\\s*\\{", "{\\n  imports = [ " + import_rel + " ];", cfg_text, count=1, flags=re.M)
+                cfg_path.write_text(cfg_text)
+'''
 
-# Insert the bundle code right before the install_wrapper subprocess line.
-# Find the line that calls the install wrapper (already patched in step 3).
-install_wrapper_line = f'            "{install_wrapper}",\n'
-if install_wrapper_line not in text:
-    raise SystemExit('Calamares source changed: install wrapper line missing')
+# Insert the statements before the nixos-install command list is built. The
+# wrapper argument itself lives inside that list, so inserting there would put
+# Python statements inside a list literal and break the Calamares job.
+install_cmd_marker = '    # build nixos-install command\n'
+if install_cmd_marker not in text:
+    install_cmd_marker = '    nixosInstallCmd = [ "pkexec" ]\n'
+if install_cmd_marker not in text:
+    raise SystemExit('Calamares source changed: nixos-install command marker missing')
 
-text = text.replace(install_wrapper_line, bundle_code + '\n' + install_wrapper_line, 1)
+text = text.replace(install_cmd_marker, bundle_code + '\n' + install_cmd_marker, 1)
 
 main.chmod(0o644)
 main.write_text(text)

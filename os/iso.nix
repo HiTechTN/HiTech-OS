@@ -20,7 +20,7 @@
 #   + common.nix restent inchangés et headless pour le vrai déploiement
 #   décrit dans le README).
 
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, self, ... }:
 
 let
   hitechosStatusScript = pkgs.writeShellScriptBin "hitechos-status-launcher" ''
@@ -95,10 +95,12 @@ in
   services.gvfs.enable = lib.mkForce false;
 
   # Doc embarquée pour un accès hors-ligne (menu "HiTech-OS — Documentation")
-  # Bundle the full HiTech-OS source tree inside the ISO so the Calamares
-  # installer can copy it to the target and import os/installation.nix
-  # before nixos-install runs (no network/git needed at install time).
-  environment.etc."hitech-os-source".source = ../.;
+  # Bundle the complete, flake-filtered source tree inside the ISO so the
+  # graphical installer can copy it to the target and import
+  # os/installation.nix before nixos-install runs (no network/git needed).
+  # `self` is the flake source (tracked files only), not the whole checkout:
+  # this avoids shipping .git, result symlinks, or local build artifacts.
+  environment.etc."hitech-os-source".source = self;
   environment.etc."hitechos/ROADMAP.md".source = ../docs/ROADMAP.md;
   environment.systemPackages = [
     pkgs.gnome-software
