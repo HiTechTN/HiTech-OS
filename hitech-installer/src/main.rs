@@ -230,7 +230,9 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<InstallStatus>>, root: 
             return;
         }
         {
-            let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut st = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if st.running {
                 send_api_error(&mut stream, "installation already running");
                 return;
@@ -244,7 +246,9 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<InstallStatus>>, root: 
         let state2 = state.clone();
         thread::spawn(move || {
             let result = install_steps(&req, &state2);
-            let mut st = state2.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut st = state2
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             st.running = false;
             st.success = result.is_ok();
             match result {
@@ -426,7 +430,9 @@ fn status_json(state: &Arc<Mutex<InstallStatus>>) -> String {
     // Probe the network before taking the status lock. A slow `nmcli` call
     // must never block the install thread's progress updates.
     let online = network_online();
-    let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut st = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     st.network_online = online;
     format!(
         "{{\"running\":{},\"success\":{},\"progress\":{},\"status\":\"{}\",\"logs\":\"{}\",\"network_online\":{}}}",
@@ -435,14 +441,18 @@ fn status_json(state: &Arc<Mutex<InstallStatus>>) -> String {
 }
 
 fn set_status(state: &Arc<Mutex<InstallStatus>>, progress: u16, status: &str) {
-    let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut st = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     st.progress = progress.min(100);
     st.status = status.to_string();
     append_log_locked(&mut st, &format!("[{progress:>3}%] {status}"));
 }
 
 fn append_log(state: &Arc<Mutex<InstallStatus>>, line: &str) {
-    let mut st = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut st = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     append_log_locked(&mut st, line);
 }
 
