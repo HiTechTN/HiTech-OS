@@ -146,8 +146,14 @@ fn read_loadavg() -> (f32, f32) {
         return (0.0, 0.0);
     };
     let mut parts = raw.split_whitespace();
-    let l1 = parts.next().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-    let l5 = parts.next().and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+    let l1 = parts
+        .next()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let l5 = parts
+        .next()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
     (l1, l5)
 }
 
@@ -181,8 +187,12 @@ fn find_top_memory_hog() -> Option<TopProcess> {
 
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(pid_str) = name.to_str() else { continue };
-        let Ok(pid) = pid_str.parse::<u32>() else { continue };
+        let Some(pid_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
 
         let statm_path = format!("/proc/{pid}/statm");
         let Ok(statm) = fs::read_to_string(&statm_path) else {

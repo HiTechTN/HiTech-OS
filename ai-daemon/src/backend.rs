@@ -53,7 +53,10 @@ impl CpuBackend {
         #[cfg(any(feature = "cpu", feature = "cuda"))]
         {
             let backend = LlamaBackend::init().context("echec initialisation llama.cpp")?;
-            Ok(Self { backend, model: None })
+            Ok(Self {
+                backend,
+                model: None,
+            })
         }
         #[cfg(not(any(feature = "cpu", feature = "cuda")))]
         {
@@ -64,17 +67,22 @@ impl CpuBackend {
     pub fn symbolic_react_plan(prompt: &str) -> String {
         let pulse = NervePulse::sense();
         let lower = prompt.to_lowercase();
-        let has_observation = lower.contains("[tool result]") || lower.contains("observation from ");
+        let has_observation =
+            lower.contains("[tool result]") || lower.contains("observation from ");
 
         if has_observation {
-            if lower.contains("failed=") && !lower.contains("failed=none") && !lower.contains("service.restart") {
+            if lower.contains("failed=")
+                && !lower.contains("failed=none")
+                && !lower.contains("service.restart")
+            {
                 if let Some(unit) = extract_failed_unit(prompt) {
                     if unit == "hitech-store.service" || unit == "ollama.service" {
                         return json!({
                             "thought": format!("Service {unit} is failed; proposing restart."),
                             "action": { "tool": "service.restart", "args": { "unit": unit } },
                             "final": null
-                        }).to_string();
+                        })
+                        .to_string();
                     }
                 }
             }
@@ -86,13 +94,19 @@ impl CpuBackend {
         }
 
         if lower.contains("proactive_heal") || lower.contains("restart") {
-            for candidate in ["hitech-store.service", "ollama.service", "mosquitto.service", "telegraf.service"] {
+            for candidate in [
+                "hitech-store.service",
+                "ollama.service",
+                "mosquitto.service",
+                "telegraf.service",
+            ] {
                 if lower.contains(candidate) {
                     return json!({
                         "thought": format!("Recovery triggered for {candidate}."),
                         "action": { "tool": "service.restart", "args": { "unit": candidate } },
                         "final": null
-                    }).to_string();
+                    })
+                    .to_string();
                 }
             }
         }
@@ -102,14 +116,16 @@ impl CpuBackend {
                 "thought": "Listing systemd services.",
                 "action": { "tool": "services.list", "args": {} },
                 "final": null
-            }).to_string();
+            })
+            .to_string();
         }
 
         json!({
             "thought": "Telemetry snapshot request.",
             "action": { "tool": "telemetry.snapshot", "args": {} },
             "final": null
-        }).to_string()
+        })
+        .to_string()
     }
 }
 
@@ -129,9 +145,13 @@ fn extract_failed_unit(text: &str) -> Option<String> {
 impl InferenceBackend for CpuBackend {
     fn name(&self) -> &'static str {
         #[cfg(any(feature = "cpu", feature = "cuda"))]
-        { "cpu (ggml/llama.cpp, GGUF, mmap)" }
+        {
+            "cpu (ggml/llama.cpp, GGUF, mmap)"
+        }
         #[cfg(not(any(feature = "cpu", feature = "cuda")))]
-        { "cpu (stub fallback)" }
+        {
+            "cpu (stub fallback)"
+        }
     }
 
     fn load_model(&mut self, path: &Path) -> Result<()> {
@@ -152,12 +172,18 @@ impl InferenceBackend for CpuBackend {
     fn generate(&mut self, prompt: &str, max_tokens: Option<i32>) -> Result<String> {
         #[cfg(any(feature = "cpu", feature = "cuda"))]
         {
-            let model = self.model.as_ref().ok_or_else(|| anyhow!("no model loaded"))?;
+            let model = self
+                .model
+                .as_ref()
+                .ok_or_else(|| anyhow!("no model loaded"))?;
             let max_tokens = max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-            let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(DEFAULT_CTX_SIZE));
+            let ctx_params =
+                LlamaContextParams::default().with_n_ctx(NonZeroU32::new(DEFAULT_CTX_SIZE));
             let mut ctx = model.new_context(&self.backend, ctx_params)?;
             let tokens_list = model.str_to_token(prompt, AddBos::Always)?;
-            if tokens_list.is_empty() { return Ok(String::new()); }
+            if tokens_list.is_empty() {
+                return Ok(String::new());
+            }
 
             let mut batch = LlamaBatch::new(512, 1);
             let last_index = (tokens_list.len() - 1) as i32;
@@ -167,13 +193,16 @@ impl InferenceBackend for CpuBackend {
             ctx.decode(&mut batch)?;
             let mut n_cur = batch.n_tokens();
             let mut decoder = encoding_rs::UTF_8.new_decoder();
-            let mut sampler = LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
+            let mut sampler =
+                LlamaSampler::chain_simple([LlamaSampler::dist(1234), LlamaSampler::greedy()]);
             let mut output = String::new();
 
             while n_cur <= n_cur + max_tokens {
                 let token = sampler.sample(&ctx, batch.n_tokens() - 1);
                 sampler.accept(token);
-                if model.is_eog_token(token) { break; }
+                if model.is_eog_token(token) {
+                    break;
+                }
                 let piece = model.token_to_piece(token, &mut decoder, true, None)?;
                 output.push_str(&piece);
                 batch.clear();
@@ -193,7 +222,9 @@ impl InferenceBackend for CpuBackend {
     fn plan_react(&mut self, prompt: &str, max_tokens: Option<i32>) -> Result<String> {
         #[cfg(any(feature = "cpu", feature = "cuda"))]
         {
-            if self.model.is_some() { return self.generate(prompt, max_tokens); }
+            if self.model.is_some() {
+                return self.generate(prompt, max_tokens);
+            }
         }
         let _ = max_tokens;
         Ok(Self::symbolic_react_plan(prompt))
