@@ -32,11 +32,9 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(path) = env::var("HITECHOS_MODEL_PATH") {
         if !path.trim().is_empty() {
             let pb = PathBuf::from(&path);
-            if pb.exists() {
-                if backend.load_model(&pb).is_ok() {
-                    model_loaded = true;
-                    model_path_str = Some(path);
-                }
+            if pb.exists() && backend.load_model(&pb).is_ok() {
+                model_loaded = true;
+                model_path_str = Some(path);
             }
         }
     }
