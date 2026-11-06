@@ -32,11 +32,9 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(path) = env::var("HITECHOS_MODEL_PATH") {
         if !path.trim().is_empty() {
             let pb = PathBuf::from(&path);
-            if pb.exists() {
-                if backend.load_model(&pb).is_ok() {
-                    model_loaded = true;
-                    model_path_str = Some(path);
-                }
+            if pb.exists() && backend.load_model(&pb).is_ok() {
+                model_loaded = true;
+                model_path_str = Some(path);
             }
         }
     }
@@ -62,13 +60,11 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(&bind_addr)?;
     println!("hitechos-ai-daemon listening on http://{bind_addr}");
 
-    for stream in listener.incoming() {
-        if let Ok(stream) = stream {
-            let st = state.clone();
-            thread::spawn(move || {
-                let _ = handle_http(stream, st);
-            });
-        }
+    for stream in listener.incoming().flatten() {
+        let st = state.clone();
+        thread::spawn(move || {
+            let _ = handle_http(stream, st);
+        });
     }
     Ok(())
 }
@@ -80,7 +76,7 @@ fn handle_http(mut stream: TcpStream, state: Arc<Mutex<DaemonState>>) -> std::io
     if reader.read_line(&mut request_line)? == 0 {
         return Ok(());
     }
-    let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
         return send_json(&mut stream, 400, &json!({"error": "bad request"}));
     }
@@ -132,7 +128,7 @@ fn handle_http(mut stream: TcpStream, state: Arc<Mutex<DaemonState>>) -> std::io
             let reply = {
                 let mut st = state.lock().unwrap_or_else(|p| p.into_inner());
                 st.backend
-                    .plan_react(&prompt, max_tokens)
+                    .plan_rc(&prompt, max_tokens)
                     .unwrap_or_else(|_| "{\"action\":null}".to_string())
             };
 
