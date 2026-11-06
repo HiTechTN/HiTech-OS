@@ -138,6 +138,14 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str],
 
 
 # --------------------------------------------------------------------------- backends
+
+    def __init__(self, model: str = "hitechos-rust-native",
+                 base_url: str = "http://127.0.0.1:11435",
+                 timeout: float = 15.0) -> None:
+        super().__init__(model=model, base_url=base_url, timeout=timeout)
+        self.name = "hitechos-rust"
+
+
 class OllamaBackend:
     """Local inference through Ollama's /api/chat."""
 
@@ -239,6 +247,16 @@ class ScriptedBackend:
 
 
 # --------------------------------------------------------------------------- router
+class HiTechRustBackend(OllamaBackend):
+    """Ultra-lightweight Rust inference & kernel nerve engine (`hitechos-ai-daemon`)."""
+
+    def __init__(self, model: str = "hitechos-rust-native",
+                 base_url: str = "http://127.0.0.1:11435",
+                 timeout: float = 15.0) -> None:
+        super().__init__(model=model, base_url=base_url, timeout=timeout)
+        self.name = "hitechos-rust"
+
+
 class ModelRouter:
     """Ordered backend chain with JSON-contract retries and stats."""
 
@@ -257,7 +275,8 @@ class ModelRouter:
         timeout = float(os.getenv("GENIO_LLM_TIMEOUT", "90"))
         backends: list[Backend] = []
         if local_model.lower() not in ("none", "off", "disabled"):
-            backends.append(OllamaBackend(
+            backends.append(HiTechRustBackend(base_url=os.getenv("GENIO_RUST_AI_URL", "http://127.0.0.1:11435")))
+        backends.append(OllamaBackend(
                 model=local_model,
                 base_url=os.getenv("GENIO_OLLAMA_URL", "http://127.0.0.1:11434"),
                 timeout=timeout))

@@ -24,6 +24,7 @@
     ./hardware-universal.nix
     ./ecosystem.nix
     ./services/hitech-store.nix
+    ./services/ai-daemon.nix
     ./services/genio.nix
     ./services/secrets.nix
     ./services/hitech-cache.nix
