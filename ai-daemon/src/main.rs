@@ -111,9 +111,12 @@ fn handle_http(mut stream: TcpStream, state: Arc<Mutex<DaemonState>>) -> std::io
                 &mut stream,
                 200,
                 &json!({
-                    "status": "ok", "service": "hitechos-ai-daemon",
-                    "backend": st.backend.name(), "model_loaded": st.model_loaded,
-                    "models": [{"name": "hitechos-rust-native:latest"}], "nerve": st.last_pulse
+                    "status": "ok",
+                    "service": "hitechos-ai-daemon",
+                    "backend": st.backend.name(),
+                    "model_loaded": st.model_loaded,
+                    "models": [{"name": "hitechos-rust-native:latest"}],
+                    "nerve": st.last_pulse
                 }),
             )
         }
@@ -168,7 +171,10 @@ fn extract_prompt(req: &Value) -> String {
 
 fn send_json(stream: &mut TcpStream, status: u16, payload: &Value) -> std::io::Result<()> {
     let body = serde_json::to_vec(payload).unwrap_or_default();
-    let header = format!("HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let header = format!(
+        "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
     stream.write_all(header.as_bytes())?;
     stream.write_all(&body)?;
     stream.flush()
